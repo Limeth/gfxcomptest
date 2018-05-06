@@ -5,3 +5,4 @@ authors = ["Jakub Hlusička <limeth@protonmail.com>"]
 
 [dependencies]
 ocl = "0.18"
+secp256k1 = "0.9.0"

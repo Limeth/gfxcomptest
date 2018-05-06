@@ -1,4 +1,7 @@
 extern crate ocl;
+extern crate secp256k1;
+
+mod context;
 
 use ocl::ProQue;
 

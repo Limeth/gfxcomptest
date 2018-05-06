@@ -1381,11 +1381,18 @@ static void secp256k1_gej_add_ge(secp256k1_gej *r, const secp256k1_gej *a, const
 
 static void secp256k1_ecmult_gen(const secp256k1_ecmult_gen_context *ctx, secp256k1_gej *r, const secp256k1_scalar *gn) {
     secp256k1_ge add;
-    secp256k1_ge_storage adds;
+    secp256k1_ge_storage adds = {
+        .x = {
+            .n = { 0 },
+        },
+        .y = {
+            .n = { 0 },
+        }
+    };
     secp256k1_scalar gnb;
     int bits;
     int i, j;
-    memset(&adds, 0, sizeof(adds));
+    /* memset(&adds, 0, sizeof(adds)); REPLACED BY EXPLICIT DECLARATION */
     *r = ctx->initial;
     /* Blind scalar/point multiplication by computing (n-b)G + bG instead of nG. */
     secp256k1_scalar_add(&gnb, gn, &ctx->blind);
@@ -1602,11 +1609,138 @@ static void secp256k1_ge_clear(secp256k1_ge *r) {
     secp256k1_fe_clear(&r->y);
 }
 
+static void secp256k1_ge_to_storage(secp256k1_ge_storage *r, const secp256k1_ge *a) {
+    secp256k1_fe x, y;
+    VERIFY_CHECK(!a->infinity);
+    x = a->x;
+    secp256k1_fe_normalize(&x);
+    y = a->y;
+    secp256k1_fe_normalize(&y);
+    secp256k1_fe_to_storage(&r->x, &x);
+    secp256k1_fe_to_storage(&r->y, &y);
+}
+
+static int secp256k1_ge_is_infinity(const secp256k1_ge *a) {
+    return a->infinity;
+}
+
+static void secp256k1_fe_normalize_var(secp256k1_fe *r) {
+    uint32_t t0 = r->n[0], t1 = r->n[1], t2 = r->n[2], t3 = r->n[3], t4 = r->n[4],
+             t5 = r->n[5], t6 = r->n[6], t7 = r->n[7], t8 = r->n[8], t9 = r->n[9];
+
+    /* Reduce t9 at the start so there will be at most a single carry from the first pass */
+    uint32_t m;
+    uint32_t x = t9 >> 22; t9 &= 0x03FFFFFUL;
+
+    /* The first pass ensures the magnitude is 1, ... */
+    t0 += x * 0x3D1UL; t1 += (x << 6);
+    t1 += (t0 >> 26); t0 &= 0x3FFFFFFUL;
+    t2 += (t1 >> 26); t1 &= 0x3FFFFFFUL;
+    t3 += (t2 >> 26); t2 &= 0x3FFFFFFUL; m = t2;
+    t4 += (t3 >> 26); t3 &= 0x3FFFFFFUL; m &= t3;
+    t5 += (t4 >> 26); t4 &= 0x3FFFFFFUL; m &= t4;
+    t6 += (t5 >> 26); t5 &= 0x3FFFFFFUL; m &= t5;
+    t7 += (t6 >> 26); t6 &= 0x3FFFFFFUL; m &= t6;
+    t8 += (t7 >> 26); t7 &= 0x3FFFFFFUL; m &= t7;
+    t9 += (t8 >> 26); t8 &= 0x3FFFFFFUL; m &= t8;
+
+    /* ... except for a possible carry at bit 22 of t9 (i.e. bit 256 of the field element) */
+    VERIFY_CHECK(t9 >> 23 == 0);
+
+    /* At most a single final reduction is needed; check if the value is >= the field characteristic */
+    x = (t9 >> 22) | ((t9 == 0x03FFFFFUL) & (m == 0x3FFFFFFUL)
+        & ((t1 + 0x40UL + ((t0 + 0x3D1UL) >> 26)) > 0x3FFFFFFUL));
+
+    if (x) {
+        t0 += 0x3D1UL; t1 += (x << 6);
+        t1 += (t0 >> 26); t0 &= 0x3FFFFFFUL;
+        t2 += (t1 >> 26); t1 &= 0x3FFFFFFUL;
+        t3 += (t2 >> 26); t2 &= 0x3FFFFFFUL;
+        t4 += (t3 >> 26); t3 &= 0x3FFFFFFUL;
+        t5 += (t4 >> 26); t4 &= 0x3FFFFFFUL;
+        t6 += (t5 >> 26); t5 &= 0x3FFFFFFUL;
+        t7 += (t6 >> 26); t6 &= 0x3FFFFFFUL;
+        t8 += (t7 >> 26); t7 &= 0x3FFFFFFUL;
+        t9 += (t8 >> 26); t8 &= 0x3FFFFFFUL;
+
+        /* If t9 didn't carry to bit 22 already, then it should have after any final reduction */
+        VERIFY_CHECK(t9 >> 22 == x);
+
+        /* Mask off the possible multiple of 2^256 from the final reduction */
+        t9 &= 0x03FFFFFUL;
+    }
+
+    r->n[0] = t0; r->n[1] = t1; r->n[2] = t2; r->n[3] = t3; r->n[4] = t4;
+    r->n[5] = t5; r->n[6] = t6; r->n[7] = t7; r->n[8] = t8; r->n[9] = t9;
+
+#ifdef VERIFY
+    r->magnitude = 1;
+    r->normalized = 1;
+    secp256k1_fe_verify(r);
+#endif
+}
+
+static void secp256k1_fe_get_b32(unsigned char *r, const secp256k1_fe *a) {
+#ifdef VERIFY
+    VERIFY_CHECK(a->normalized);
+    secp256k1_fe_verify(a);
+#endif
+    r[0] = (a->n[9] >> 14) & 0xff;
+    r[1] = (a->n[9] >> 6) & 0xff;
+    r[2] = ((a->n[9] & 0x3F) << 2) | ((a->n[8] >> 24) & 0x3);
+    r[3] = (a->n[8] >> 16) & 0xff;
+    r[4] = (a->n[8] >> 8) & 0xff;
+    r[5] = a->n[8] & 0xff;
+    r[6] = (a->n[7] >> 18) & 0xff;
+    r[7] = (a->n[7] >> 10) & 0xff;
+    r[8] = (a->n[7] >> 2) & 0xff;
+    r[9] = ((a->n[7] & 0x3) << 6) | ((a->n[6] >> 20) & 0x3f);
+    r[10] = (a->n[6] >> 12) & 0xff;
+    r[11] = (a->n[6] >> 4) & 0xff;
+    r[12] = ((a->n[6] & 0xf) << 4) | ((a->n[5] >> 22) & 0xf);
+    r[13] = (a->n[5] >> 14) & 0xff;
+    r[14] = (a->n[5] >> 6) & 0xff;
+    r[15] = ((a->n[5] & 0x3f) << 2) | ((a->n[4] >> 24) & 0x3);
+    r[16] = (a->n[4] >> 16) & 0xff;
+    r[17] = (a->n[4] >> 8) & 0xff;
+    r[18] = a->n[4] & 0xff;
+    r[19] = (a->n[3] >> 18) & 0xff;
+    r[20] = (a->n[3] >> 10) & 0xff;
+    r[21] = (a->n[3] >> 2) & 0xff;
+    r[22] = ((a->n[3] & 0x3) << 6) | ((a->n[2] >> 20) & 0x3f);
+    r[23] = (a->n[2] >> 12) & 0xff;
+    r[24] = (a->n[2] >> 4) & 0xff;
+    r[25] = ((a->n[2] & 0xf) << 4) | ((a->n[1] >> 22) & 0xf);
+    r[26] = (a->n[1] >> 14) & 0xff;
+    r[27] = (a->n[1] >> 6) & 0xff;
+    r[28] = ((a->n[1] & 0x3f) << 2) | ((a->n[0] >> 24) & 0x3);
+    r[29] = (a->n[0] >> 16) & 0xff;
+    r[30] = (a->n[0] >> 8) & 0xff;
+    r[31] = a->n[0] & 0xff;
+}
+
+static void write(uchar *memory, uint integer) {
+    for (int offset = 0; offset < 4; offset++) {
+#ifdef __ENDIAN_LITTLE__
+        uchar *byte_dst = &memory[offset];
+#else
+        uchar *byte_dst = &memory[3 - offset];
+#endif
+        *byte_dst = (uchar) (integer & 0xFF);
+        integer = integer >> 8;
+    }
+}
+
 static void secp256k1_pubkey_save(secp256k1_pubkey* pubkey, secp256k1_ge* ge) {
     if (sizeof(secp256k1_ge_storage) == 64) {
         secp256k1_ge_storage s;
         secp256k1_ge_to_storage(&s, ge);
-        memcpy(&pubkey->data[0], &s, sizeof(s));
+
+        /* memcpy(&pubkey->data[0], &s, sizeof(s)); REPLACED WITH THE FOLLOWING */
+        for (int i = 0; i < 8; i++) {
+            write(&pubkey->data[ 0 + i * 4], s.x.n[i]);
+            write(&pubkey->data[32 + i * 4], s.y.n[i]);
+        }
     } else {
         VERIFY_CHECK(!secp256k1_ge_is_infinity(ge));
         secp256k1_fe_normalize_var(&ge->x);
@@ -1614,6 +1748,10 @@ static void secp256k1_pubkey_save(secp256k1_pubkey* pubkey, secp256k1_ge* ge) {
         secp256k1_fe_get_b32(pubkey->data, &ge->x);
         secp256k1_fe_get_b32(pubkey->data + 32, &ge->y);
     }
+}
+
+static int secp256k1_ecmult_gen_context_is_built(const secp256k1_ecmult_gen_context* ctx) {
+    return ctx->prec != NULL;
 }
 
 int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *seckey) {
@@ -1624,7 +1762,10 @@ int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *p
     int ret = 0;
     VERIFY_CHECK(ctx != NULL);
     ARG_CHECK(pubkey != NULL);
-    memset(pubkey, 0, sizeof(*pubkey));
+    *pubkey = (secp256k1_pubkey) {
+        .data = { 0 }
+    };
+    /* memset(pubkey, 0, sizeof(*pubkey)); REPLACED BY EXPLICIT DECLARATION */
     ARG_CHECK(secp256k1_ecmult_gen_context_is_built(&ctx->ecmult_gen_ctx));
     ARG_CHECK(seckey != NULL);
 
@@ -1640,6 +1781,103 @@ int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *p
 }
 // }}}
 
+// {{{ secp256k1 context
+/* static void secp256k1_ecmult_context_init(secp256k1_ecmult_context *ctx) { */
+/*     ctx->pre_g = NULL; */
+/* #ifdef USE_ENDOMORPHISM */
+/*     ctx->pre_g_128 = NULL; */
+/* #endif */
+/* } */
+
+/* static void secp256k1_ecmult_context_build(secp256k1_ecmult_context *ctx, const secp256k1_callback *cb) { */
+/*     secp256k1_gej gj; */
+
+/*     if (ctx->pre_g != NULL) { */
+/*         return; */
+/*     } */
+
+/*     /1* get the generator *1/ */
+/*     secp256k1_gej_set_ge(&gj, &secp256k1_ge_const_g); */
+
+/*     ctx->pre_g = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+
+/*     /1* precompute the tables with odd multiples *1/ */
+/*     secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g, &gj, cb); */
+
+/* #ifdef USE_ENDOMORPHISM */
+/*     { */
+/*         secp256k1_gej g_128j; */
+/*         int i; */
+
+/*         ctx->pre_g_128 = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g_128)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+
+/*         /1* calculate 2^128*generator *1/ */
+/*         g_128j = gj; */
+/*         for (i = 0; i < 128; i++) { */
+/*             secp256k1_gej_double_var(&g_128j, &g_128j, NULL); */
+/*         } */
+/*         secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g_128, &g_128j, cb); */
+/*     } */
+/* #endif */
+/* } */
+
+/* static void secp256k1_ecmult_context_build(secp256k1_ecmult_context *ctx, const secp256k1_callback *cb) { */
+/*     secp256k1_gej gj; */
+
+/*     if (ctx->pre_g != NULL) { */
+/*         return; */
+/*     } */
+
+/*     /1* get the generator *1/ */
+/*     secp256k1_gej_set_ge(&gj, &secp256k1_ge_const_g); */
+
+/*     ctx->pre_g = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+
+/*     /1* precompute the tables with odd multiples *1/ */
+/*     secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g, &gj, cb); */
+
+/* #ifdef USE_ENDOMORPHISM */
+/*     { */
+/*         secp256k1_gej g_128j; */
+/*         int i; */
+
+/*         ctx->pre_g_128 = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g_128)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+
+/*         /1* calculate 2^128*generator *1/ */
+/*         g_128j = gj; */
+/*         for (i = 0; i < 128; i++) { */
+/*             secp256k1_gej_double_var(&g_128j, &g_128j, NULL); */
+/*         } */
+/*         secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g_128, &g_128j, cb); */
+/*     } */
+/* #endif */
+/* } */
+
+/* bool secp256k1_context_create(secp256k1_context* ret, unsigned int flags) { */
+/*     ret->illegal_callback = default_illegal_callback; */
+/*     ret->error_callback = default_error_callback; */
+
+/*     if (EXPECT((flags & SECP256K1_FLAGS_TYPE_MASK) != SECP256K1_FLAGS_TYPE_CONTEXT, 0)) { */
+/*             secp256k1_callback_call(&ret->illegal_callback, */
+/*                                     "Invalid flags"); */
+/*             free(ret); */
+/*             return false; */
+/*     } */
+
+/*     secp256k1_ecmult_context_init(&ret->ecmult_ctx); */
+/*     secp256k1_ecmult_gen_context_init(&ret->ecmult_gen_ctx); */
+
+/*     if (flags & SECP256K1_FLAGS_BIT_CONTEXT_SIGN) { */
+/*         secp256k1_ecmult_gen_context_build(&ret->ecmult_gen_ctx, &ret->error_callback); */
+/*     } */
+/*     if (flags & SECP256K1_FLAGS_BIT_CONTEXT_VERIFY) { */
+/*         secp256k1_ecmult_context_build(&ret->ecmult_ctx, &ret->error_callback); */
+/*     } */
+
+/*     return true; */
+/* } */
+// }}}
+
 // }}}
 
 uint collatz_iterations(uint n) {
@@ -1652,16 +1890,17 @@ uint collatz_iterations(uint n) {
     return sum;
 }
 
-kernel void entry_point(global uint *input, uint scalar) {
+/*
+TODO:
+create a type similar to secp256k1_context without any pointers, to be passed
+as an argument to the kernel.
+*/
+kernel void entry_point(global uint *input, uint scalar, secp256k1_context ctxi) {
     size_t i = get_global_id(0);
-
-    input[i] = collatz_iterations(input[i]) * scalar;
-
-    /* secp256k1_context ctx = (secp256k1_context_struct) { 0 }; */
     secp256k1_context ctx;
-    uint x;
 
-    printf("%u\n", x);
     /* secp256k1_context_create(&ctx, 0); */
-    /* printf("%u\n", input[i]); */
+
+    /* printf("%u\n", x); */
+    input[i] = collatz_iterations(input[i]) * scalar;
 }
