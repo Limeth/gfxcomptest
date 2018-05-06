@@ -4,7 +4,4 @@ version = "0.1.0"
 authors = ["Jakub Hlusička <limeth@protonmail.com>"]
 
 [dependencies]
-# gfx = { git = "https://github.com/gfx-rs/gfx", rev = "e61e882" }
-env_logger = "0.5"
-gfx-hal = { git = "https://github.com/gfx-rs/gfx", rev = "e61e882" }
-gfx-backend-vulkan = { git = "https://github.com/gfx-rs/gfx", rev = "e61e882" }
+ocl = "0.18"
