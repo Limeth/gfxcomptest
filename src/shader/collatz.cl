@@ -106,6 +106,14 @@ THE SOFTWARE.
 }
 
 #define SECP256K1_FE_CONST(d7, d6, d5, d4, d3, d2, d1, d0) {SECP256K1_FE_CONST_INNER((d7), (d6), (d5), (d4), (d3), (d2), (d1), (d0))}
+
+#ifdef USE_ENDOMORPHISM
+#define WINDOW_G 15
+#else
+#define WINDOW_G 16
+#endif
+
+#define ECMULT_TABLE_SIZE(w) (1 << ((w)-2))
 // }}}
 
 // {{{ secp256k1 structs
@@ -140,11 +148,7 @@ typedef struct {
 } secp256k1_ge_storage;
 
 typedef struct {
-    unsigned char data[64];
-} secp256k1_pubkey;
-
-typedef struct {
-    secp256k1_ge_storage (*pre_g)[];
+    secp256k1_ge_storage (*pre_g)[ECMULT_TABLE_SIZE(WINDOW_G)];
 } secp256k1_ecmult_context;
 
 typedef struct {
@@ -164,6 +168,25 @@ typedef struct secp256k1_context_struct {
     secp256k1_callback illegal_callback;
     secp256k1_callback error_callback;
 } secp256k1_context;
+
+typedef struct {
+    secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
+} secp256k1_ecmult_context_arg;
+
+typedef struct {
+    secp256k1_ge_storage prec[64][16];
+    secp256k1_scalar blind;
+    secp256k1_gej initial;
+} secp256k1_ecmult_gen_context_arg;
+
+typedef struct secp256k1_context_struct_arg {
+    secp256k1_ecmult_context_arg ecmult_ctx;
+    secp256k1_ecmult_gen_context_arg ecmult_gen_ctx;
+} secp256k1_context_arg;
+
+typedef struct {
+    unsigned char data[64];
+} secp256k1_pubkey;
 
 static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text);
 SECP256K1_INLINE static int secp256k1_scalar_check_overflow(const secp256k1_scalar *a);
@@ -1895,7 +1918,7 @@ TODO:
 create a type similar to secp256k1_context without any pointers, to be passed
 as an argument to the kernel.
 */
-kernel void entry_point(global uint *input, uint scalar, secp256k1_context ctxi) {
+kernel void entry_point(global uint *input, uint scalar, constant secp256k1_context *ctx_arg) {
     size_t i = get_global_id(0);
     secp256k1_context ctx;
 

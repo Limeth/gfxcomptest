@@ -1,3 +1,4 @@
+use ocl::traits::OclPrm;
 use secp256k1::ContextFlag;
 use secp256k1::ffi;
 use secp256k1::ffi::Context;
@@ -5,45 +6,33 @@ use std::os::raw::c_char;
 use std::os::raw::c_void;
 use std::convert::From;
 use std::default::Default;
+use std::fmt;
 use std::mem;
 
+// rust-secp256k1 compiles secp256k1 with endomorphism
+const USE_ENDOMORPHISM: bool = true;
+const WINDOW_G: usize = 15; // When USE_ENDOMORPHISM is true
+// const WINDOW_G: usize = 16; // When USE_ENDOMORPHISM is false
+const ECMULT_TABLE_SIZE: usize = 1 << (WINDOW_G - 2);
+
+// So that each chunk is 65536 bytes (roughly as large as the rest of the context)
+pub const ECMULT_TABLE_CHUNK_LEN: usize = 65536 / mem::size_of::<secp256k1_ge_storage>();
+// Integer division with ceiling
+pub const ECMULT_TABLE_CHUNKS: usize = (ECMULT_TABLE_SIZE + ECMULT_TABLE_CHUNK_LEN - 1) / ECMULT_TABLE_CHUNK_LEN;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_scalar {
+    pub d: [u32; 8],
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[repr(C)]
 pub struct secp256k1_fe {
     pub n: [u32; 10],
-// #ifdef VERIFY
-//     int magnitude;
-//     int normalized;
-// #endif
 }
 
-// impl<'a> From<&'a secp256k1_fe> for shader::ty::secp256k1_fe {
-//     fn from(from: &'a secp256k1_fe) -> Self {
-//         shader::ty::secp256k1_fe {
-//             n: from.n,
-//         }
-//     }
-// }
-
-#[repr(C)]
-pub struct secp256k1_fe_storage {
-    pub n: [u32; 8],
-}
-
-// impl<'a> From<&'a secp256k1_fe_storage> for shader::ty::secp256k1_fe_storage {
-//     fn from(from: &'a secp256k1_fe_storage) -> Self {
-//         shader::ty::secp256k1_fe_storage {
-//             n: from.n,
-//         }
-//     }
-// }
-
-#[repr(C)]
-pub struct secp256k1_ge {
-    pub x: secp256k1_fe,
-    pub y: secp256k1_fe,
-    pub infinity: i32,
-}
-
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[repr(C)]
 pub struct secp256k1_gej {
     pub x: secp256k1_fe,
@@ -52,58 +41,31 @@ pub struct secp256k1_gej {
     pub infinity: i32,
 }
 
-// impl<'a> From<&'a secp256k1_gej> for shader::ty::secp256k1_gej {
-//     fn from(from: &'a secp256k1_gej) -> Self {
-//         shader::ty::secp256k1_gej {
-//             x: (&from.x).into(),
-//             _dummy0: unsafe { mem::zeroed() },
-//             y: (&from.y).into(),
-//             _dummy1: unsafe { mem::zeroed() },
-//             z: (&from.z).into(),
-//             _dummy2: unsafe { mem::zeroed() },
-//             infinity: from.infinity,
-//         }
-//     }
-// }
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_ge {
+    pub x: secp256k1_fe,
+    pub y: secp256k1_fe,
+    pub infinity: i32,
+}
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_fe_storage {
+    pub n: [u32; 8],
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[repr(C)]
 pub struct secp256k1_ge_storage {
     pub x: secp256k1_fe_storage,
     pub y: secp256k1_fe_storage,
 }
 
-// impl<'a> From<&'a secp256k1_ge_storage> for shader::ty::secp256k1_ge_storage {
-//     fn from(from: &'a secp256k1_ge_storage) -> Self {
-//         shader::ty::secp256k1_ge_storage {
-//             x: (&from.x).into(),
-//             _dummy0: unsafe { mem::zeroed() },
-//             y: (&from.y).into(),
-//             _dummy1: unsafe { mem::zeroed() },
-//         }
-//     }
-// }
-
 #[repr(C)]
 pub struct secp256k1_ecmult_context {
-    // secp256k1_ge_storage (*pre_g)[];
-    pub pre_g: *mut [secp256k1_ge_storage],
-// #ifdef USE_ENDOMORPHISM
-//     secp256k1_ge_storage (*pre_g_128)[]; /* odd multiples of 2^128*generator */
-// #endif
+    pub pre_g: *mut [secp256k1_ge_storage; ECMULT_TABLE_SIZE],
 }
-
-#[repr(C)]
-pub struct secp256k1_scalar {
-    pub d: [u32; 8],
-}
-
-// impl<'a> From<&'a secp256k1_scalar> for shader::ty::secp256k1_scalar {
-//     fn from(from: &'a secp256k1_scalar) -> Self {
-//         shader::ty::secp256k1_scalar {
-//             d: from.d,
-//         }
-//     }
-// }
 
 #[repr(C)]
 pub struct secp256k1_ecmult_gen_context {
@@ -115,7 +77,7 @@ pub struct secp256k1_ecmult_gen_context {
 #[repr(C)]
 pub struct secp256k1_callback {
     // void (*fn)(const char *text, void* data);
-    pub function: *mut fn(*const c_char, *mut c_void),
+    pub function: *mut extern "C" fn(*const c_char, *mut c_void),
     // const void* data;
     pub data: *const c_void,
 }
@@ -126,6 +88,70 @@ pub struct secp256k1_context_struct {
     pub ecmult_gen_ctx: secp256k1_ecmult_gen_context,
     pub illegal_callback: secp256k1_callback,
     pub error_callback: secp256k1_callback,
+}
+
+// We need to introduce newtypes for the arrays, because it is not possible to impl traits for
+// arrays
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct ecmult_table_chunk([secp256k1_ge_storage; ECMULT_TABLE_CHUNK_LEN]);
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct prec_alias_inner([secp256k1_ge_storage; 16]);
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct prec_alias([prec_alias_inner; 64]);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_ecmult_gen_context_arg {
+    pub prec: prec_alias,
+    pub blind: secp256k1_scalar,
+    pub initial: secp256k1_gej,
+}
+
+macro_rules! impl_array {
+    ($alias:ident([$T:ty; $len:expr])) => {
+        impl PartialEq for $alias {
+            fn eq(&self, other: &$alias) -> bool {
+                for (a, b) in self.0.iter().zip(other.0.iter()) {
+                    if a.ne(b) {
+                        return false;
+                    }
+                }
+
+                true
+            }
+        }
+
+        impl Default for $alias {
+            fn default() -> Self {
+                $alias([<$T as Default>::default(); $len])
+            }
+        }
+
+        impl fmt::Debug for $alias {
+            fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+                (&self.0[..]).fmt(f)
+            }
+        }
+    }
+}
+
+impl_array!(ecmult_table_chunk([secp256k1_ge_storage; ECMULT_TABLE_CHUNK_LEN]));
+impl_array!(prec_alias_inner([secp256k1_ge_storage; 16]));
+impl_array!(prec_alias([prec_alias_inner; 64]));
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_context_struct_arg {
+    /*
+     * Sent in chunks (ecmult_table_chunk):
+     * pub ecmult_ctx: secp256k1_ecmult_context_arg,
+     */
+    pub ecmult_gen_ctx: secp256k1_ecmult_gen_context_arg,
 }
 
 pub type secp256k1_context = secp256k1_context_struct;
@@ -155,53 +181,14 @@ impl Secp256k1Context {
         return &*(self.ctx as *mut secp256k1_context)
     }
 
-    // fn get_ecmult_gen_context_part_prec_quarter_offset(&self, offset: usize) -> shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //     unsafe {
-    //         let context = self.transmute_ctx();
+    fn copied_without_pointers(
+        &self,
+        offset: usize,
+    ) -> (secp256k1_context_struct_arg, Box<[ecmult_table_chunk; ECMULT_TABLE_CHUNKS]>) {
+        let ctx: &mut secp256k1_context_struct = unsafe { &mut *(self.ctx as *mut secp256k1_context_struct) };
 
-    //         shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //             array_quarter: {
-    //                 let mut result = [[mem::uninitialized::<shader::ty::secp256k1_ge_storage>(); 16]; 16];
-
-    //                 for (subarray_index, subarray) in result.iter_mut().enumerate() {
-    //                     for (index, item) in subarray.iter_mut().enumerate() {
-    //                         *item = (&(*context.ecmult_gen_ctx.prec)[subarray_index + offset][index]).into();
-    //                     }
-    //                 }
-
-    //                 result
-    //             }
-    //         }
-    //     }
-    // }
-
-    // pub fn get_ecmult_gen_context_part_prec_quarter_first(&self) -> shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //     self.get_ecmult_gen_context_part_prec_quarter_offset(0)
-    // }
-
-    // pub fn get_ecmult_gen_context_part_prec_quarter_second(&self) -> shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //     self.get_ecmult_gen_context_part_prec_quarter_offset(16)
-    // }
-
-    // pub fn get_ecmult_gen_context_part_prec_quarter_third(&self) -> shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //     self.get_ecmult_gen_context_part_prec_quarter_offset(32)
-    // }
-
-    // pub fn get_ecmult_gen_context_part_prec_quarter_fourth(&self) -> shader::ty::secp256k1_ecmult_gen_context_part_prec_quarter {
-    //     self.get_ecmult_gen_context_part_prec_quarter_offset(48)
-    // }
-
-    // pub fn get_ecmult_gen_context_part_rest(&self) -> shader::ty::secp256k1_ecmult_gen_context_part_rest {
-    //     unsafe {
-    //         let context = self.transmute_ctx();
-
-    //         shader::ty::secp256k1_ecmult_gen_context_part_rest {
-    //             blind: (&context.ecmult_gen_ctx.blind).into(),
-    //             initial: (&context.ecmult_gen_ctx.initial).into(),
-    //             _dummy0: unsafe { mem::zeroed() },
-    //         }
-    //     }
-    // }
+        ()
+    }
 }
 
 impl Drop for Secp256k1Context {
@@ -209,3 +196,5 @@ impl Drop for Secp256k1Context {
         unsafe { ffi::secp256k1_context_destroy(self.ctx); }
     }
 }
+
+unsafe impl OclPrm for secp256k1_context_struct_arg {}
