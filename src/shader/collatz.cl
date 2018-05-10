@@ -1,3 +1,4 @@
+#define USE_ENDOMORPHISM 1
 #define uint32_t uint
 #define uint64_t ulong
 
@@ -114,6 +115,9 @@ THE SOFTWARE.
 #endif
 
 #define ECMULT_TABLE_SIZE(w) (1 << ((w)-2))
+#define SIZE_OF_SECP256K1_GE_STORAGE 64
+#define ECMULT_TABLE_CHUNK_LEN (65536 / SIZE_OF_SECP256K1_GE_STORAGE)
+#define ECMULT_TABLE_CHUNKS(w) ((ECMULT_TABLE_SIZE(w) + ECMULT_TABLE_CHUNK_LEN - 1) / ECMULT_TABLE_CHUNK_LEN)
 // }}}
 
 // {{{ secp256k1 structs
@@ -169,9 +173,7 @@ typedef struct secp256k1_context_struct {
     secp256k1_callback error_callback;
 } secp256k1_context;
 
-typedef struct {
-    secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
-} secp256k1_ecmult_context_arg;
+typedef secp256k1_ge_storage ecmult_table_chunk[ECMULT_TABLE_CHUNK_LEN];
 
 typedef struct {
     secp256k1_ge_storage prec[64][16];
@@ -180,7 +182,10 @@ typedef struct {
 } secp256k1_ecmult_gen_context_arg;
 
 typedef struct secp256k1_context_struct_arg {
-    secp256k1_ecmult_context_arg ecmult_ctx;
+    /*
+     * Sent in chunks (ecmult_table_chunk):
+     * secp256k1_ecmult_context_arg ecmult_ctx;
+     */
     secp256k1_ecmult_gen_context_arg ecmult_gen_ctx;
 } secp256k1_context_arg;
 
@@ -1918,12 +1923,11 @@ TODO:
 create a type similar to secp256k1_context without any pointers, to be passed
 as an argument to the kernel.
 */
-kernel void entry_point(global uint *input, uint scalar, constant secp256k1_context *ctx_arg) {
+kernel void entry_point(global uint *input, uint scalar, global secp256k1_context_arg *ctx_arg, global ecmult_table_chunk *chunk) {
     size_t i = get_global_id(0);
     secp256k1_context ctx;
 
-    /* secp256k1_context_create(&ctx, 0); */
+    printf("device: %u\n", ctx_arg->ecmult_gen_ctx.blind.d[0]);
 
-    /* printf("%u\n", x); */
     input[i] = collatz_iterations(input[i]) * scalar;
 }
