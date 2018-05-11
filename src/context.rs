@@ -22,7 +22,7 @@ pub const WINDOW_G: usize = 15; // When USE_ENDOMORPHISM is true
 pub const ECMULT_TABLE_SIZE: usize = 1 << (WINDOW_G - 2);
 
 // So that each chunk is 65536 bytes (roughly as large as the rest of the context)
-pub const ECMULT_TABLE_CHUNK_LEN: usize = 65536 / mem::size_of::<secp256k1_ge_storage>();
+pub const ECMULT_TABLE_CHUNK_LEN: usize = 32768 / mem::size_of::<secp256k1_ge_storage>();
 // Integer division with ceiling
 pub const ECMULT_TABLE_CHUNKS: usize = (ECMULT_TABLE_SIZE + ECMULT_TABLE_CHUNK_LEN - 1) / ECMULT_TABLE_CHUNK_LEN;
 
@@ -69,11 +69,18 @@ pub struct secp256k1_ge_storage {
 }
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct secp256k1_ecmult_context {
     pub pre_g: *mut [secp256k1_ge_storage; ECMULT_TABLE_SIZE],
+    //#ifdef USE_ENDOMORPHISM
+    // ctx->pre_g_128 = checked_malloc(cb, sizeof((*ctx->pre_g_128)[0]) * ECMULT_TABLE_SIZE(WINDOW_G));
+    pub pre_g_128: *mut [secp256k1_ge_storage; ECMULT_TABLE_SIZE],
+        // secp256k1_ge_storage (*pre_g_128)[];
+    //#endif
 }
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct secp256k1_ecmult_gen_context {
     pub prec: *mut [[secp256k1_ge_storage; 16]; 64],
     pub blind: secp256k1_scalar,
@@ -93,6 +100,7 @@ pub struct secp256k1_callback {
 }
 
 #[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct secp256k1_context_struct {
     pub ecmult_ctx: secp256k1_ecmult_context,
     pub ecmult_gen_ctx: secp256k1_ecmult_gen_context,
@@ -105,6 +113,13 @@ pub struct secp256k1_context_struct {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct ecmult_table_chunk([secp256k1_ge_storage; ECMULT_TABLE_CHUNK_LEN]);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[repr(C)]
+pub struct secp256k1_ecmult_context_chunk {
+    pub pre_g_chunk: ecmult_table_chunk,
+    pub pre_g_128_chunk: ecmult_table_chunk,
+}
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -158,7 +173,7 @@ impl_array!(prec_alias([prec_alias_inner; 64]));
 #[repr(C)]
 pub struct secp256k1_context_struct_arg {
     /*
-     * Sent in chunks (ecmult_table_chunk):
+     * Sent in chunks (secp256k1_ecmult_context_chunk):
      * pub ecmult_ctx: secp256k1_ecmult_context_arg,
      */
     pub ecmult_gen_ctx: secp256k1_ecmult_gen_context_arg,
@@ -191,8 +206,32 @@ impl Secp256k1Context {
         return &*(self.ctx as *mut secp256k1_context)
     }
 
-    pub fn copied_without_pointers(&mut self) -> (secp256k1_context_struct_arg, Box<[ecmult_table_chunk; ECMULT_TABLE_CHUNKS]>) {
+    fn hexdump<T>(pointer: *mut T, len: usize) {
+        let mut hexdump = String::new();
+
+        unsafe {
+            for offset in 0..len {
+                if offset % 16 == 0 {
+                    hexdump += "\n";
+                } else if offset % 4 == 0 {
+                    hexdump += " ";
+                }
+
+                let byte: u8 = *(pointer as *mut _ as *mut u8).offset(offset as isize);
+                hexdump += &format!("{:02x} ", byte);
+            }
+        }
+
+        println!("hexdump:{}", hexdump);
+    }
+
+    pub fn copied_without_pointers(&mut self) -> (secp256k1_context_struct_arg, Box<[secp256k1_ecmult_context_chunk; ECMULT_TABLE_CHUNKS]>) {
         let ctx: &mut secp256k1_context_struct = unsafe { mem::transmute(self.ctx) };
+
+        println!("ctx: {:#?}", ctx);
+
+        Self::hexdump(ctx, mem::size_of::<secp256k1_context_struct>());
+        Self::hexdump(ctx.ecmult_ctx.pre_g, 16);
 
         debug!("const", "WINDOW_G", WINDOW_G);
         debug!("const", "ECMULT_TABLE_SIZE", ECMULT_TABLE_SIZE);
@@ -219,13 +258,15 @@ impl Secp256k1Context {
 
         let ecmult_ctx = &mut ctx.ecmult_ctx;
         let pre_g: &mut [secp256k1_ge_storage; ECMULT_TABLE_SIZE] = unsafe { &mut *ecmult_ctx.pre_g };
-        let mut chunks = Box::new([ecmult_table_chunk::default(); ECMULT_TABLE_CHUNKS]);
+        let pre_g_128: &mut [secp256k1_ge_storage; ECMULT_TABLE_SIZE] = unsafe { &mut *ecmult_ctx.pre_g_128 };
+        let mut chunks = Box::new([secp256k1_ecmult_context_chunk::default(); ECMULT_TABLE_CHUNKS]);
 
         for chunk_index in 0..ECMULT_TABLE_CHUNKS {
             let lower_bound = chunk_index * ECMULT_TABLE_CHUNK_LEN;
             let upper_bound = Ord::min(lower_bound + ECMULT_TABLE_CHUNK_LEN, ECMULT_TABLE_SIZE);
 
-            (&mut (*chunks)[chunk_index].0).clone_from_slice(&pre_g[lower_bound..upper_bound]);
+            (&mut (*chunks)[chunk_index].pre_g_chunk.0).clone_from_slice(&pre_g[lower_bound..upper_bound]);
+            (&mut (*chunks)[chunk_index].pre_g_128_chunk.0).clone_from_slice(&pre_g_128[lower_bound..upper_bound]);
         }
 
         (ctx_arg, chunks)
@@ -239,4 +280,4 @@ impl Drop for Secp256k1Context {
 }
 
 unsafe impl OclPrm for secp256k1_context_struct_arg {}
-unsafe impl OclPrm for ecmult_table_chunk {}
+unsafe impl OclPrm for secp256k1_ecmult_context_chunk {}

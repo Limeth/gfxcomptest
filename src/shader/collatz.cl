@@ -1,6 +1,15 @@
+#define USE_NUM_NONE 1
+#define USE_FIELD_INV_BUILTIN 1
+#define USE_SCALAR_INV_BUILTIN 1
+#define USE_FIELD_10X26 1
+#define USE_SCALAR_8X32 1
 #define USE_ENDOMORPHISM 1
+#define ENABLE_MODULE_ECDH 1
+#define ENABLE_MODULE_SCHNORR 1
+#define ENABLE_MODULE_RECOVERY 1
 #define uint32_t uint
 #define uint64_t ulong
+#define bool uint
 
 // {{{ secp256k1
 
@@ -57,6 +66,14 @@ THE SOFTWARE.
 #else
 #define VERIFY_BITS(x, n) do { } while(0)
 #endif
+
+/* static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text) { */
+/*     cb->fn(text, (void*)cb->data); */
+/* } */
+
+#define secp256k1_callback_call(cb, cond) do { \
+    printf(#cond, (void*) cb.data); \
+} while (0);
 
 #define ARG_CHECK(cond) do { \
     if (EXPECT(!(cond), 0)) { \
@@ -116,7 +133,7 @@ THE SOFTWARE.
 
 #define ECMULT_TABLE_SIZE(w) (1 << ((w)-2))
 #define SIZE_OF_SECP256K1_GE_STORAGE 64
-#define ECMULT_TABLE_CHUNK_LEN (65536 / SIZE_OF_SECP256K1_GE_STORAGE)
+#define ECMULT_TABLE_CHUNK_LEN (32768 / SIZE_OF_SECP256K1_GE_STORAGE)
 #define ECMULT_TABLE_CHUNKS(w) ((ECMULT_TABLE_SIZE(w) + ECMULT_TABLE_CHUNK_LEN - 1) / ECMULT_TABLE_CHUNK_LEN)
 // }}}
 
@@ -153,6 +170,9 @@ typedef struct {
 
 typedef struct {
     secp256k1_ge_storage (*pre_g)[ECMULT_TABLE_SIZE(WINDOW_G)];
+#ifdef USE_ENDOMORPHISM
+    secp256k1_ge_storage (*pre_g_128)[ECMULT_TABLE_SIZE(WINDOW_G)];
+#endif
 } secp256k1_ecmult_context;
 
 typedef struct {
@@ -162,8 +182,8 @@ typedef struct {
 } secp256k1_ecmult_gen_context;
 
 typedef struct {
-    void (*fn)(constant const char *text, void* data);
-    const void* data;
+    /* void (*fn)(constant const char *text, void* data); */
+    void* data;
 } secp256k1_callback;
 
 typedef struct secp256k1_context_struct {
@@ -174,6 +194,13 @@ typedef struct secp256k1_context_struct {
 } secp256k1_context;
 
 typedef secp256k1_ge_storage ecmult_table_chunk[ECMULT_TABLE_CHUNK_LEN];
+
+typedef struct {
+    ecmult_table_chunk pre_g_chunk;
+#ifdef USE_ENDOMORPHISM
+    ecmult_table_chunk pre_g_128_chunk;
+#endif
+} secp256k1_ecmult_context_chunk;
 
 typedef struct {
     secp256k1_ge_storage prec[64][16];
@@ -193,7 +220,7 @@ typedef struct {
     unsigned char data[64];
 } secp256k1_pubkey;
 
-static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text);
+/* static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text); */
 SECP256K1_INLINE static int secp256k1_scalar_check_overflow(const secp256k1_scalar *a);
 SECP256K1_INLINE static int secp256k1_scalar_reduce(secp256k1_scalar *r, uint32_t overflow);
 static void secp256k1_scalar_set_b32(secp256k1_scalar *r, const unsigned char *b32, int *overflow);
@@ -239,9 +266,9 @@ static void secp256k1_ge_clear(secp256k1_ge *r);
 // }}}
 
 // {{{ fallback
-static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text) {
-    cb->fn(text, (void*)cb->data);
-}
+/* static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text) { */
+/*     cb->fn(text, (void*)cb->data); */
+/* } */
 // }}}
 
 // {{{ secret key verification
@@ -1908,26 +1935,111 @@ int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *p
 
 // }}}
 
-uint collatz_iterations(uint n) {
-    uint sum = 0;
+typedef struct {
+    uint *input;
+    secp256k1_context_arg *ctx_arg;
+    secp256k1_ecmult_context_chunk *chunk;
+} arguments;
 
-    for (uint i = 0; i < n; i++) {
-        sum += n;
-    }
+enum state {
+    STATE_LOADING_CONTEXT,
+    STATE_RUNNING,
+};
 
-    return sum;
+static global bool state = STATE_LOADING_CONTEXT;
+
+static global uint loading_index = 0;
+static global secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
+#ifdef USE_ENDOMORPHISM
+static global secp256k1_ge_storage pre_g_128[ECMULT_TABLE_SIZE(WINDOW_G)];
+#endif
+static global secp256k1_ge_storage prec[64][16];
+static global secp256k1_context context;
+
+void initialize_context(arguments *args) {
+    context = (secp256k1_context) {
+        .ecmult_ctx = (secp256k1_ecmult_context) {
+            .pre_g = &pre_g,
+#ifdef USE_ENDOMORPHISM
+            .pre_g_128 = &pre_g_128,
+#endif
+        },
+        .ecmult_gen_ctx = (secp256k1_ecmult_gen_context) {
+            .prec = &prec,
+            .blind = (secp256k1_scalar) {
+                .d = { 0 },
+            },
+            .initial = (secp256k1_gej) {
+                .x = (secp256k1_fe) { .n = { 0 } },
+                .y = (secp256k1_fe) { .n = { 0 } },
+                .z = (secp256k1_fe) { .n = { 0 } },
+                .infinity = 0,
+            },
+        },
+        .illegal_callback = (secp256k1_callback) {
+            .data = NULL,
+        },
+        .error_callback = (secp256k1_callback) {
+            .data = NULL,
+        },
+    };
 }
 
-/*
-TODO:
-create a type similar to secp256k1_context without any pointers, to be passed
-as an argument to the kernel.
-*/
-kernel void entry_point(global uint *input, uint scalar, global secp256k1_context_arg *ctx_arg, global ecmult_table_chunk *chunk) {
+void branch_loading_context_atomic(arguments *args) {
+    printf("loading_context_atomic\n");
+
+    if (loading_index == 0) {
+        initialize_context(args);
+    }
+
+    // Possibly parallelize
+    size_t lower_bound = loading_index * ECMULT_TABLE_CHUNK_LEN;
+    size_t upper_bound = min((uint) (lower_bound + ECMULT_TABLE_CHUNK_LEN), (uint) (ECMULT_TABLE_SIZE(WINDOW_G)));
+
+    for (size_t item_index = lower_bound; item_index < upper_bound; item_index++) {
+        pre_g[item_index] = args->chunk->pre_g_chunk[item_index];
+#ifdef USE_ENDOMORPHISM
+        pre_g_128[item_index] = args->chunk->pre_g_128_chunk[item_index];
+#endif
+    }
+
+    loading_index++;
+
+    if (upper_bound >= ECMULT_TABLE_SIZE(WINDOW_G)) {
+        state = STATE_RUNNING;
+    }
+}
+
+void branch_loading_context(arguments *args) {
     size_t i = get_global_id(0);
-    secp256k1_context ctx;
 
-    printf("device: %u\n", ctx_arg->ecmult_gen_ctx.blind.d[0]);
+    if (i == 0) {
+        branch_loading_context_atomic(args);
+    }
 
-    input[i] = collatz_iterations(input[i]) * scalar;
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE);
+}
+
+void branch_running(arguments *args) {
+    size_t i = get_global_id(0);
+    printf("running in parallel\n");
+}
+
+kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_arg, global secp256k1_ecmult_context_chunk *chunk) {
+    arguments args = (arguments) {
+        .input = input,
+        .ctx_arg = ctx_arg,
+        .chunk = chunk,
+    };
+
+    switch (state) {
+        case STATE_LOADING_CONTEXT:
+            branch_loading_context(&args);
+            break;
+        case STATE_RUNNING:
+            branch_running(&args);
+            break;
+    }
+
+    input[get_global_id(0)]++;
 }
