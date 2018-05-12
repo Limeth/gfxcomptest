@@ -27,7 +27,7 @@ THE SOFTWARE.
  * to occur.
  */
 #define abort() do { \
-    printf("Aborting kernel execution by calling `abort()`."); \
+    printf("Aborting kernel execution by calling `abort()`.\n"); \
     constant char *pointer = ""; \
     printf("%s", pointer); \
 } while (0)

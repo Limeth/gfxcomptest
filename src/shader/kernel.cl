@@ -15,6 +15,12 @@
 
 #include "src/shader/std.cl"
 #include "src/shader/secp256k1.cl"
+#include "src/shader/keccak.cl"
+
+#define ADDRESS_LENGTH 40
+#define ADDRESS_BYTES (ADDRESS_LENGTH / 2)
+#define KECCAK_OUTPUT_BYTES 32
+#define ADDRESS_BYTE_INDEX (KECCAK_OUTPUT_BYTES - ADDRESS_BYTES)
 
 typedef struct {
     uint *input;
@@ -359,6 +365,62 @@ void run_eckey_edge_case_test(secp256k1_context *ctx) {
     /* /1* secp256k1_context_set_illegal_callback(ctx, NULL, NULL); *1/ */
 }
 
+inline char hex_digit_to_char(uchar byte) {
+    if (byte <= 9) {
+        return '0' + byte;
+    } else {
+        return 'a' + (byte - 10);
+    }
+}
+
+void to_hex_string(uchar *slice, size_t slice_len, char *result) {
+    for (size_t offset = 0; offset < slice_len; offset++) {
+        uchar byte = slice[offset];
+        size_t result_index = offset * 2;
+
+        result[result_index + 0] = hex_digit_to_char(byte >>  4);
+        result[result_index + 1] = hex_digit_to_char(byte & 0xF);
+    }
+}
+
+#define PRINT_CHARACTER(literal, variable) do { \
+    if (variable == literal[0]) { \
+        printf(literal); \
+    } \
+} while (0)
+
+void print_address(char *address) {
+    size_t len = 40;
+
+    if (address[1] == 'x' && address[0] == '0') {
+        len += 2;
+    }
+
+    for (size_t offset = 0; offset < len; offset++) {
+        char character = address[offset];
+
+        CHECK(character >= '0' && character <= '9' || character >= 'a' && character <= 'f' || character == 'x');
+
+        PRINT_CHARACTER("0", character);
+        PRINT_CHARACTER("1", character);
+        PRINT_CHARACTER("2", character);
+        PRINT_CHARACTER("3", character);
+        PRINT_CHARACTER("4", character);
+        PRINT_CHARACTER("5", character);
+        PRINT_CHARACTER("6", character);
+        PRINT_CHARACTER("7", character);
+        PRINT_CHARACTER("8", character);
+        PRINT_CHARACTER("9", character);
+        PRINT_CHARACTER("a", character);
+        PRINT_CHARACTER("b", character);
+        PRINT_CHARACTER("c", character);
+        PRINT_CHARACTER("d", character);
+        PRINT_CHARACTER("e", character);
+        PRINT_CHARACTER("f", character);
+        PRINT_CHARACTER("x", character);
+    }
+}
+
 void branch_running(arguments *args) {
     size_t i = get_global_id(0);
 
@@ -382,19 +444,37 @@ void branch_running(arguments *args) {
         printf("%llu result: %i\n", i, result);
         return;
     }
-    /* printf("omg"); */
 
     secp256k1_pubkey pubkey;
 
-    hexdump("pubkey", (void*) &pubkey.data, 64);
+    secp256k1_ec_pubkey_create(&context, &pubkey, (const uchar*) seckey);
+
+    hexdump("pubkey raw", (void*) &pubkey.data, 64);
 
     uchar output[65] = { 0 };
     size_t outputlen = 65;
+    uchar *public_key_array = ((uchar*) output) + 1;
 
-    secp256k1_ec_pubkey_serialize(&context, (uchar*) output, &outputlen, &pubkey, SECP256K1_EC_UNCOMPRESSED);
+    /* secp256k1_ec_pubkey_serialize(&context, (uchar*) output, &outputlen, &pubkey, SECP256K1_EC_UNCOMPRESSED); */
 
-    hexdump("pubkey", (void*) output, 65);
-    printf("%llu outputlen: %i\n", i, outputlen);
+    public_key_array[3] = 3;
+    public_key_array[4] = 4;
+    public_key_array[17] = 17;
+    public_key_array[29] = 29;
+    public_key_array[51] = 51;
+    public_key_array[63] = 63;
+
+    hexdump("pubkey ser", public_key_array, 64);
+
+    keccak_result hash = keccak256(public_key_array, 64);
+
+    hexdump("keccak", (void*) hash.array, BITS / 8);
+
+    char address[42] = { '0', 'x' };
+
+    to_hex_string(&hash.array[ADDRESS_BYTE_INDEX], ADDRESS_BYTES, address + 2);
+    print_address(address);
+    printf("\n");
     printf("%llu result: %i\n", i, result);
 }
 

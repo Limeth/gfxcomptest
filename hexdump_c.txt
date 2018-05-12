@@ -1,0 +1,32 @@
+[C] context hexdump:
+10 f0 4b 3c  aa 7f 00 00  00 41 d4 01  00 00 00 00
+f0 40 d3 01  00 00 00 00
+
+b6 1f 2f 84  95 55 b7 32
+d9 fc 5a 3e  a4 95 4d 4f  2d e8 5b ef  90 7d fd 92
+e7 29 56 7a  58 0f 3f 7c  28 31 cd 00  14 37 df 06
+f0 04 b5 02  e4 ef ec 0f  6c e9 4b 02  ec 25 7a 08
+30 07 a8 0f  c4 c2 60 0c  64 93 95 02  70 f3 08 00
+78 08 92 0c  40 a0 84 0e  1c 61 28 04  10 d4 a4 0d
+c4 e4 ab 08  94 a5 89 08  0c ea 6d 0b  5c 5e ad 06
+e4 71 6a 0c  e4 bb c1 00  c6 c2 39 06  78 16 57 00
+86 59 61 04  a0 c4 9a 06  de c9 6a 06  8a 0b 5d 04
+d0 b8 57 00  c8 ee 34 01  2c 96 7e 04  f8 3b 38 00
+00 00 00 00  00 00 00 00
+
+69 bb 41 00  00 00 00 00  00 00 00 00  00 00 00 00
+9b bb 41 00  00 00 00 00  00 00 00 00  00 00 00 00
+
+[C] 16 bytes of pre_g hexdump:
+98 17 f8 16  5b 81 f2 59  d9 28 ce 2d  db fc 9b 02
+[C] 16 bytes of pre_g_128 hexdump:
+da c0 c4 9e  4c 44 7b 1b  35 a3 3e 72  78 56 8c e8
+[C] 16 bytes of prec hexdump:
+b5 4b 04 ba  48 e5 ce fb  d0 6c de 08  1f 7b 81 56
+
+[C] last 16 bytes of pre_g hexdump:
+af aa 74 84  28 5c 93 42  ed ff 43 f5  71 f7 23 c9
+[C] last 16 bytes of pre_g_128 hexdump:
+98 e2 3b f5  ac f8 c8 4f  20 1c 69 5b  ed a7 bd 59
+[C] last 16 bytes of prec hexdump:
+77 4d 60 d3  2d f2 fd 8f  49 e3 f8 62  bc 7d 5e 91
