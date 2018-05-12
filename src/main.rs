@@ -26,7 +26,7 @@ fn main() -> ocl::Result<()> {
     let mut program_builder = ProgramBuilder::new();
 
     program_builder.cmplr_opt("-cl-std=CL2.0");
-    program_builder.src(include_str!("shader/collatz.cl"));
+    program_builder.src(include_str!("shader/kernel.cl"));
 
     let pro_que: ProQue = ProQue::builder()
         .prog_bldr(program_builder)
