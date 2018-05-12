@@ -20,32 +20,59 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#define USE_NUM_NONE 1
-#define USE_FIELD_INV_BUILTIN 1
-#define USE_SCALAR_INV_BUILTIN 1
-#define USE_FIELD_10X26 1
-#define USE_SCALAR_8X32 1
-#define USE_ENDOMORPHISM 1
-#define ENABLE_MODULE_ECDH 1
-#define ENABLE_MODULE_SCHNORR 1
-#define ENABLE_MODULE_RECOVERY 1
-#define uint32_t uint
-#define uint64_t ulong
-#define bool uint
-
-// {{{ secp256k1 constants
-/* #define SECP256K1_PUBKEY_LENGTH_BYTE 64 */
-/* #define SECP256K1_PUBKEY_LENGTH_I32 16 */
-
-/* #define SECP256K1_SECKEY_LENGTH_BYTE 32 */
-/* #define SECP256K1_SECKEY_LENGTH_I32 8 */
-// }}}
-
 // {{{ secp256k1 macros
+
+/*
+ * I don't think it's possible to abort execution in OpenCL, so I cause an error
+ * to occur.
+ */
+#define abort() do { \
+    printf("Aborting kernel execution by calling `abort()`."); \
+    constant char *pointer = ""; \
+    printf("%s", pointer); \
+} while (0)
+
+#if !defined(VG_CHECK)
+# if defined(VALGRIND)
+#  include <valgrind/memcheck.h>
+#  define VG_UNDEF(x,y) VALGRIND_MAKE_MEM_UNDEFINED((x),(y))
+#  define VG_CHECK(x,y) VALGRIND_CHECK_MEM_IS_DEFINED((x),(y))
+# else
+#  define VG_UNDEF(x,y)
+#  define VG_CHECK(x,y)
+# endif
+#endif
+
+#ifdef DETERMINISTIC
+#define TEST_FAILURE(msg) do { \
+    printf("[stderr] %s\n", msg); \
+    abort(); \
+} while(0);
+#else
+#define TEST_FAILURE(msg) do { \
+    printf("[stderr] [%s:%d] %s\n", __FILE__, __LINE__, msg); \
+    abort(); \
+} while(0)
+#endif
+
 #ifdef HAVE_BUILTIN_EXPECT
 #define EXPECT(x,c) __builtin_expect((x),(c))
 #else
 #define EXPECT(x,c) (x)
+#endif
+
+#ifdef DETERMINISTIC
+#define CHECK(cond) do { \
+    if (EXPECT(!(cond), 0)) { \
+        TEST_FAILURE("test condition failed"); \
+    } \
+} while(0)
+#else
+#define CHECK(cond) do { \
+    if (EXPECT(!(cond), 0)) { \
+        TEST_FAILURE("test condition failed: " #cond); \
+    } \
+} while(0)
 #endif
 
 #if defined(COVERAGE)
@@ -64,6 +91,23 @@ THE SOFTWARE.
 #else
 #define VERIFY_BITS(x, n) do { } while(0)
 #endif
+
+#define SECP256K1_FLAGS_TYPE_MASK ((1 << 8) - 1)
+#define SECP256K1_FLAGS_TYPE_CONTEXT (1 << 0)
+#define SECP256K1_FLAGS_TYPE_COMPRESSION (1 << 1)
+/** The higher bits contain the actual data. Do not use directly. */
+#define SECP256K1_FLAGS_BIT_CONTEXT_VERIFY (1 << 8)
+#define SECP256K1_FLAGS_BIT_CONTEXT_SIGN (1 << 9)
+#define SECP256K1_FLAGS_BIT_COMPRESSION (1 << 8)
+
+/** Flags to pass to secp256k1_context_create. */
+#define SECP256K1_CONTEXT_VERIFY (SECP256K1_FLAGS_TYPE_CONTEXT | SECP256K1_FLAGS_BIT_CONTEXT_VERIFY)
+#define SECP256K1_CONTEXT_SIGN (SECP256K1_FLAGS_TYPE_CONTEXT | SECP256K1_FLAGS_BIT_CONTEXT_SIGN)
+#define SECP256K1_CONTEXT_NONE (SECP256K1_FLAGS_TYPE_CONTEXT)
+
+/** Flag to pass to secp256k1_ec_pubkey_serialize and secp256k1_ec_privkey_export. */
+#define SECP256K1_EC_COMPRESSED (SECP256K1_FLAGS_TYPE_COMPRESSION | SECP256K1_FLAGS_BIT_COMPRESSION)
+#define SECP256K1_EC_UNCOMPRESSED (SECP256K1_FLAGS_TYPE_COMPRESSION)
 
 /* static SECP256K1_INLINE void secp256k1_callback_call(const secp256k1_callback * const cb, constant const char * const text) { */
 /*     cb->fn(text, (void*)cb->data); */
@@ -122,6 +166,8 @@ THE SOFTWARE.
 }
 
 #define SECP256K1_FE_CONST(d7, d6, d5, d4, d3, d2, d1, d0) {SECP256K1_FE_CONST_INNER((d7), (d6), (d5), (d4), (d3), (d2), (d1), (d0))}
+
+#define WINDOW_A 5
 
 #ifdef USE_ENDOMORPHISM
 #define WINDOW_G 15
@@ -232,6 +278,19 @@ static SECP256K1_INLINE void secp256k1_fe_from_storage(secp256k1_fe *r, const se
 static void secp256k1_gej_double_var(secp256k1_gej *r, const secp256k1_gej *a, secp256k1_fe *rzr);
 SECP256K1_INLINE static void secp256k1_fe_clear(secp256k1_fe *a);
 static void secp256k1_ge_clear(secp256k1_ge *r);
+int secp256k1_ec_pubkey_serialize(const secp256k1_context* ctx, unsigned char *output, size_t *outputlen, const secp256k1_pubkey* pubkey, unsigned int flags);
+/* int secp256k1_ec_pubkey_tweak_mul(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *tweak); */
+/* int secp256k1_ec_privkey_tweak_mul(const secp256k1_context* ctx, unsigned char *seckey, const unsigned char *tweak); */
+/* int secp256k1_ec_pubkey_tweak_add(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *tweak); */
+/* int secp256k1_ec_privkey_tweak_add(const secp256k1_context* ctx, unsigned char *seckey, const unsigned char *tweak); */
+/* static int secp256k1_eckey_privkey_tweak_add(secp256k1_scalar *key, const secp256k1_scalar *tweak); */
+/* static int secp256k1_eckey_pubkey_tweak_add(const secp256k1_ecmult_context *ctx, secp256k1_ge *key, const secp256k1_scalar *tweak); */
+/* static int secp256k1_eckey_privkey_tweak_mul(secp256k1_scalar *key, const secp256k1_scalar *tweak); */
+/* static int secp256k1_eckey_pubkey_tweak_mul(const secp256k1_ecmult_context *ctx, secp256k1_ge *key, const secp256k1_scalar *tweak); */
+/* SECP256K1_INLINE static void secp256k1_scalar_set_int(secp256k1_scalar *r, unsigned int v); */
+/* static void secp256k1_ecmult(const secp256k1_ecmult_context *ctx, secp256k1_gej *r, const secp256k1_gej *a, const secp256k1_scalar *na, const secp256k1_scalar *ng); */
+/* static void secp256k1_scalar_split_lambda(secp256k1_scalar *r1, secp256k1_scalar *r2, const secp256k1_scalar *a); */
+/* static int secp256k1_ecmult_wnaf(int *wnaf, int len, const secp256k1_scalar *a, int w); */
 // }}}
 
 // {{{ secp256k1 constants
@@ -1656,6 +1715,12 @@ SECP256K1_INLINE static void secp256k1_fe_clear(secp256k1_fe *a) {
     }
 }
 
+static void secp256k1_ge_set_xy(secp256k1_ge *r, const secp256k1_fe *x, const secp256k1_fe *y) {
+    r->infinity = 0;
+    r->x = *x;
+    r->y = *y;
+}
+
 static void secp256k1_ge_clear(secp256k1_ge *r) {
     r->infinity = 0;
     secp256k1_fe_clear(&r->x);
@@ -1731,6 +1796,38 @@ static void secp256k1_fe_normalize_var(secp256k1_fe *r) {
     r->normalized = 1;
     secp256k1_fe_verify(r);
 #endif
+}
+
+SECP256K1_INLINE static int secp256k1_fe_is_zero(const secp256k1_fe *a) {
+    const uint32_t *t = a->n;
+#ifdef VERIFY
+    VERIFY_CHECK(a->normalized);
+    secp256k1_fe_verify(a);
+#endif
+    return (t[0] | t[1] | t[2] | t[3] | t[4] | t[5] | t[6] | t[7] | t[8] | t[9]) == 0;
+}
+
+static int secp256k1_fe_set_b32(secp256k1_fe *r, const unsigned char *a) {
+    int i;
+    r->n[0] = r->n[1] = r->n[2] = r->n[3] = r->n[4] = 0;
+    r->n[5] = r->n[6] = r->n[7] = r->n[8] = r->n[9] = 0;
+    for (i=0; i<32; i++) {
+        int j;
+        for (j=0; j<4; j++) {
+            int limb = (8*i+2*j)/26;
+            int shift = (8*i+2*j)%26;
+            r->n[limb] |= (uint32_t)((a[31-i] >> (2*j)) & 0x3) << shift;
+        }
+    }
+    if (r->n[9] == 0x3FFFFFUL && (r->n[8] & r->n[7] & r->n[6] & r->n[5] & r->n[4] & r->n[3] & r->n[2]) == 0x3FFFFFFUL && (r->n[1] + 0x40UL + ((r->n[0] + 0x3D1UL) >> 26)) > 0x3FFFFFFUL) {
+        return 0;
+    }
+#ifdef VERIFY
+    r->magnitude = 1;
+    r->normalized = 1;
+    secp256k1_fe_verify(r);
+#endif
+    return 1;
 }
 
 static void secp256k1_fe_get_b32(unsigned char *r, const secp256k1_fe *a) {
@@ -1832,101 +1929,418 @@ int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *p
     secp256k1_scalar_clear(&sec);
     return ret;
 }
+
+SECP256K1_INLINE static int secp256k1_fe_is_odd(const secp256k1_fe *a) {
+#ifdef VERIFY
+    VERIFY_CHECK(a->normalized);
+    secp256k1_fe_verify(a);
+#endif
+    return a->n[0] & 1;
+}
+
+static int secp256k1_eckey_pubkey_serialize(secp256k1_ge *elem, unsigned char *pub, size_t *size, int compressed) {
+    if (secp256k1_ge_is_infinity(elem)) {
+        return 0;
+    }
+    secp256k1_fe_normalize_var(&elem->x);
+    secp256k1_fe_normalize_var(&elem->y);
+    secp256k1_fe_get_b32(&pub[1], &elem->x);
+    if (compressed) {
+        *size = 33;
+        pub[0] = 0x02 | (secp256k1_fe_is_odd(&elem->y) ? 0x01 : 0x00);
+    } else {
+        *size = 65;
+        pub[0] = 0x04;
+        secp256k1_fe_get_b32(&pub[33], &elem->y);
+    }
+    return 1;
+}
+
+static int secp256k1_pubkey_load(const secp256k1_context* ctx, secp256k1_ge* ge, const secp256k1_pubkey* pubkey) {
+    if (sizeof(secp256k1_ge_storage) == 64) {
+        /* When the secp256k1_ge_storage type is exactly 64 byte, use its
+         * representation inside secp256k1_pubkey, as conversion is very fast.
+         * Note that secp256k1_pubkey_save must use the same representation. */
+        secp256k1_ge_storage s;
+        memcpy(&s, &pubkey->data[0], 64);
+        secp256k1_ge_from_storage(ge, &s);
+    } else {
+        /* Otherwise, fall back to 32-byte big endian for X and Y. */
+        secp256k1_fe x, y;
+        secp256k1_fe_set_b32(&x, pubkey->data);
+        secp256k1_fe_set_b32(&y, pubkey->data + 32);
+        secp256k1_ge_set_xy(ge, &x, &y);
+    }
+    ARG_CHECK(!secp256k1_fe_is_zero(&ge->x));
+    return 1;
+}
+
+int secp256k1_ec_pubkey_serialize(const secp256k1_context* ctx, unsigned char *output, size_t *outputlen, const secp256k1_pubkey* pubkey, unsigned int flags) {
+    secp256k1_ge Q;
+    size_t len;
+    int ret = 0;
+
+    (void)ctx;
+    VERIFY_CHECK(ctx != NULL);
+    ARG_CHECK(outputlen != NULL);
+    ARG_CHECK(*outputlen >= ((flags & SECP256K1_FLAGS_BIT_COMPRESSION) ? 33 : 65));
+    len = *outputlen;
+    *outputlen = 0;
+    ARG_CHECK(output != NULL);
+    memset(output, 0, len);
+    ARG_CHECK(pubkey != NULL);
+    ARG_CHECK((flags & SECP256K1_FLAGS_TYPE_MASK) == SECP256K1_FLAGS_TYPE_COMPRESSION);
+    if (secp256k1_pubkey_load(ctx, &Q, pubkey)) {
+        ret = secp256k1_eckey_pubkey_serialize(&Q, output, &len, flags & SECP256K1_FLAGS_BIT_COMPRESSION);
+        if (ret) {
+            *outputlen = len;
+        }
+    }
+    return ret;
+}
 // }}}
 
-// {{{ secp256k1 context
-/* static void secp256k1_ecmult_context_init(secp256k1_ecmult_context *ctx) { */
-/*     ctx->pre_g = NULL; */
-/* #ifdef USE_ENDOMORPHISM */
-/*     ctx->pre_g_128 = NULL; */
-/* #endif */
-/* } */
+/* // {{{ ecmult*/
+/* static void secp256k1_ecmult(const secp256k1_ecmult_context *ctx, secp256k1_gej *r, const secp256k1_gej *a, const secp256k1_scalar *na, const secp256k1_scalar *ng) {*/
+/*     secp256k1_ge pre_a[ECMULT_TABLE_SIZE(WINDOW_A)];*/
+/*     secp256k1_ge tmpa;*/
+/*     secp256k1_fe Z;*/
+/* #ifdef USE_ENDOMORPHISM*/
+/*     secp256k1_ge pre_a_lam[ECMULT_TABLE_SIZE(WINDOW_A)];*/
+/*     secp256k1_scalar na_1, na_lam;*/
+/*     secp256k1_scalar ng_1, ng_128;*/
+/*     int wnaf_na_1[130];*/
+/*     int wnaf_na_lam[130];*/
+/*     int bits_na_1;*/
+/*     int bits_na_lam;*/
+/*     int wnaf_ng_1[129];*/
+/*     int bits_ng_1;*/
+/*     int wnaf_ng_128[129];*/
+/*     int bits_ng_128;*/
+/* #else*/
+/*     int wnaf_na[256];*/
+/*     int bits_na;*/
+/*     int wnaf_ng[256];*/
+/*     int bits_ng;*/
+/* #endif*/
+/*     int i;*/
+/*     int bits;*/
 
-/* static void secp256k1_ecmult_context_build(secp256k1_ecmult_context *ctx, const secp256k1_callback *cb) { */
-/*     secp256k1_gej gj; */
+/* #ifdef USE_ENDOMORPHISM*/
+/*     secp256k1_scalar_split_lambda(&na_1, &na_lam, na);*/
 
-/*     if (ctx->pre_g != NULL) { */
-/*         return; */
-/*     } */
+/*     bits_na_1   = secp256k1_ecmult_wnaf(wnaf_na_1,   130, &na_1,   WINDOW_A);*/
+/*     bits_na_lam = secp256k1_ecmult_wnaf(wnaf_na_lam, 130, &na_lam, WINDOW_A);*/
+/*     VERIFY_CHECK(bits_na_1 <= 130);*/
+/*     VERIFY_CHECK(bits_na_lam <= 130);*/
+/*     bits = bits_na_1;*/
+/*     if (bits_na_lam > bits) {*/
+/*         bits = bits_na_lam;*/
+/*     }*/
+/* #else*/
+/*     bits_na     = secp256k1_ecmult_wnaf(wnaf_na,     256, na,      WINDOW_A);*/
+/*     bits = bits_na;*/
+/* #endif*/
 
-/*     /1* get the generator *1/ */
-/*     secp256k1_gej_set_ge(&gj, &secp256k1_ge_const_g); */
+/*     secp256k1_ecmult_odd_multiples_table_globalz_windowa(pre_a, &Z, a);*/
 
-/*     ctx->pre_g = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+/* #ifdef USE_ENDOMORPHISM*/
+/*     for (i = 0; i < ECMULT_TABLE_SIZE(WINDOW_A); i++) {*/
+/*         secp256k1_ge_mul_lambda(&pre_a_lam[i], &pre_a[i]);*/
+/*     }*/
 
-/*     /1* precompute the tables with odd multiples *1/ */
-/*     secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g, &gj, cb); */
+/*     secp256k1_scalar_split_128(&ng_1, &ng_128, ng);*/
 
-/* #ifdef USE_ENDOMORPHISM */
-/*     { */
-/*         secp256k1_gej g_128j; */
-/*         int i; */
+/*     bits_ng_1   = secp256k1_ecmult_wnaf(wnaf_ng_1,   129, &ng_1,   WINDOW_G);*/
+/*     bits_ng_128 = secp256k1_ecmult_wnaf(wnaf_ng_128, 129, &ng_128, WINDOW_G);*/
+/*     if (bits_ng_1 > bits) {*/
+/*         bits = bits_ng_1;*/
+/*     }*/
+/*     if (bits_ng_128 > bits) {*/
+/*         bits = bits_ng_128;*/
+/*     }*/
+/* #else*/
+/*     bits_ng     = secp256k1_ecmult_wnaf(wnaf_ng,     256, ng,      WINDOW_G);*/
+/*     if (bits_ng > bits) {*/
+/*         bits = bits_ng;*/
+/*     }*/
+/* #endif*/
 
-/*         ctx->pre_g_128 = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g_128)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+/*     secp256k1_gej_set_infinity(r);*/
 
-/*         /1* calculate 2^128*generator *1/ */
-/*         g_128j = gj; */
-/*         for (i = 0; i < 128; i++) { */
-/*             secp256k1_gej_double_var(&g_128j, &g_128j, NULL); */
-/*         } */
-/*         secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g_128, &g_128j, cb); */
-/*     } */
-/* #endif */
-/* } */
+/*     for (i = bits - 1; i >= 0; i--) {*/
+/*         int n;*/
+/*         secp256k1_gej_double_var(r, r, NULL);*/
+/* #ifdef USE_ENDOMORPHISM*/
+/*         if (i < bits_na_1 && (n = wnaf_na_1[i])) {*/
+/*             ECMULT_TABLE_GET_GE(&tmpa, pre_a, n, WINDOW_A);*/
+/*             secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);*/
+/*         }*/
+/*         if (i < bits_na_lam && (n = wnaf_na_lam[i])) {*/
+/*             ECMULT_TABLE_GET_GE(&tmpa, pre_a_lam, n, WINDOW_A);*/
+/*             secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);*/
+/*         }*/
+/*         if (i < bits_ng_1 && (n = wnaf_ng_1[i])) {*/
+/*             ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g, n, WINDOW_G);*/
+/*             secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);*/
+/*         }*/
+/*         if (i < bits_ng_128 && (n = wnaf_ng_128[i])) {*/
+/*             ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g_128, n, WINDOW_G);*/
+/*             secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);*/
+/*         }*/
+/* #else*/
+/*         if (i < bits_na && (n = wnaf_na[i])) {*/
+/*             ECMULT_TABLE_GET_GE(&tmpa, pre_a, n, WINDOW_A);*/
+/*             secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);*/
+/*         }*/
+/*         if (i < bits_ng && (n = wnaf_ng[i])) {*/
+/*             ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g, n, WINDOW_G);*/
+/*             secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);*/
+/*         }*/
+/* #endif*/
+/*     }*/
 
-/* static void secp256k1_ecmult_context_build(secp256k1_ecmult_context *ctx, const secp256k1_callback *cb) { */
-/*     secp256k1_gej gj; */
+/*     if (!r->infinity) {*/
+/*         secp256k1_fe_mul(&r->z, &r->z, &Z);*/
+/*     }*/
+/* }*/
 
-/*     if (ctx->pre_g != NULL) { */
-/*         return; */
-/*     } */
+/* static int secp256k1_ecmult_wnaf(int *wnaf, int len, const secp256k1_scalar *a, int w) {*/
+/*     secp256k1_scalar s = *a;*/
+/*     int last_set_bit = -1;*/
+/*     int bit = 0;*/
+/*     int sign = 1;*/
+/*     int carry = 0;*/
 
-/*     /1* get the generator *1/ */
-/*     secp256k1_gej_set_ge(&gj, &secp256k1_ge_const_g); */
+/*     VERIFY_CHECK(wnaf != NULL);*/
+/*     VERIFY_CHECK(0 <= len && len <= 256);*/
+/*     VERIFY_CHECK(a != NULL);*/
+/*     VERIFY_CHECK(2 <= w && w <= 31);*/
 
-/*     ctx->pre_g = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+/*     memset(wnaf, 0, len * sizeof(wnaf[0]));*/
 
-/*     /1* precompute the tables with odd multiples *1/ */
-/*     secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g, &gj, cb); */
+/*     if (secp256k1_scalar_get_bits(&s, 255, 1)) {*/
+/*         secp256k1_scalar_negate(&s, &s);*/
+/*         sign = -1;*/
+/*     }*/
 
-/* #ifdef USE_ENDOMORPHISM */
-/*     { */
-/*         secp256k1_gej g_128j; */
-/*         int i; */
+/*     while (bit < len) {*/
+/*         int now;*/
+/*         int word;*/
+/*         if (secp256k1_scalar_get_bits(&s, bit, 1) == (unsigned int)carry) {*/
+/*             bit++;*/
+/*             continue;*/
+/*         }*/
 
-/*         ctx->pre_g_128 = (secp256k1_ge_storage (*)[])checked_malloc(cb, sizeof((*ctx->pre_g_128)[0]) * ECMULT_TABLE_SIZE(WINDOW_G)); */
+/*         now = w;*/
+/*         if (now > len - bit) {*/
+/*             now = len - bit;*/
+/*         }*/
 
-/*         /1* calculate 2^128*generator *1/ */
-/*         g_128j = gj; */
-/*         for (i = 0; i < 128; i++) { */
-/*             secp256k1_gej_double_var(&g_128j, &g_128j, NULL); */
-/*         } */
-/*         secp256k1_ecmult_odd_multiples_table_storage_var(ECMULT_TABLE_SIZE(WINDOW_G), *ctx->pre_g_128, &g_128j, cb); */
-/*     } */
-/* #endif */
-/* } */
+/*         word = secp256k1_scalar_get_bits_var(&s, bit, now) + carry;*/
 
-/* bool secp256k1_context_create(secp256k1_context* ret, unsigned int flags) { */
-/*     ret->illegal_callback = default_illegal_callback; */
-/*     ret->error_callback = default_error_callback; */
+/*         carry = (word >> (w-1)) & 1;*/
+/*         word -= carry << w;*/
 
-/*     if (EXPECT((flags & SECP256K1_FLAGS_TYPE_MASK) != SECP256K1_FLAGS_TYPE_CONTEXT, 0)) { */
-/*             secp256k1_callback_call(&ret->illegal_callback, */
-/*                                     "Invalid flags"); */
-/*             free(ret); */
-/*             return false; */
-/*     } */
+/*         wnaf[bit] = sign * word;*/
+/*         last_set_bit = bit;*/
 
-/*     secp256k1_ecmult_context_init(&ret->ecmult_ctx); */
-/*     secp256k1_ecmult_gen_context_init(&ret->ecmult_gen_ctx); */
+/*         bit += now;*/
+/*     }*/
+/* #ifdef VERIFY*/
+/*     CHECK(carry == 0);*/
+/*     while (bit < 256) {*/
+/*         CHECK(secp256k1_scalar_get_bits(&s, bit++, 1) == 0);*/
+/*     }*/ 
+/* #endif*/
+/*     return last_set_bit + 1;*/
+/* }*/
+/* // }}}*/
 
-/*     if (flags & SECP256K1_FLAGS_BIT_CONTEXT_SIGN) { */
-/*         secp256k1_ecmult_gen_context_build(&ret->ecmult_gen_ctx, &ret->error_callback); */
-/*     } */
-/*     if (flags & SECP256K1_FLAGS_BIT_CONTEXT_VERIFY) { */
-/*         secp256k1_ecmult_context_build(&ret->ecmult_ctx, &ret->error_callback); */
-/*     } */
+/* // {{{ scalar*/
+/* SECP256K1_INLINE static void secp256k1_scalar_set_int(secp256k1_scalar *r, unsigned int v) {*/
+/*     r->d[0] = v;*/
+/*     r->d[1] = 0;*/
+/*     r->d[2] = 0;*/
+/*     r->d[3] = 0;*/
+/*     r->d[4] = 0;*/
+/*     r->d[5] = 0;*/
+/*     r->d[6] = 0;*/
+/*     r->d[7] = 0;*/
+/* }*/
 
-/*     return true; */
-/* } */
-// }}}
+/* static void secp256k1_scalar_split_lambda(secp256k1_scalar *r1, secp256k1_scalar *r2, const secp256k1_scalar *a) {*/
+/*     secp256k1_scalar c1, c2;*/
+/*     static const secp256k1_scalar minus_lambda = SECP256K1_SCALAR_CONST(*/
+/*         0xAC9C52B3UL, 0x3FA3CF1FUL, 0x5AD9E3FDUL, 0x77ED9BA4UL,*/
+/*         0xA880B9FCUL, 0x8EC739C2UL, 0xE0CFC810UL, 0xB51283CFUL*/
+/*     );*/
+/*     static const secp256k1_scalar minus_b1 = SECP256K1_SCALAR_CONST(*/
+/*         0x00000000UL, 0x00000000UL, 0x00000000UL, 0x00000000UL,*/
+/*         0xE4437ED6UL, 0x010E8828UL, 0x6F547FA9UL, 0x0ABFE4C3UL*/
+/*     );*/
+/*     static const secp256k1_scalar minus_b2 = SECP256K1_SCALAR_CONST(*/
+/*         0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFEUL,*/
+/*         0x8A280AC5UL, 0x0774346DUL, 0xD765CDA8UL, 0x3DB1562CUL*/
+/*     );*/
+/*     static const secp256k1_scalar g1 = SECP256K1_SCALAR_CONST(*/
+/*         0x00000000UL, 0x00000000UL, 0x00000000UL, 0x00003086UL,*/
+/*         0xD221A7D4UL, 0x6BCDE86CUL, 0x90E49284UL, 0xEB153DABUL*/
+/*     );*/
+/*     static const secp256k1_scalar g2 = SECP256K1_SCALAR_CONST(*/
+/*         0x00000000UL, 0x00000000UL, 0x00000000UL, 0x0000E443UL,*/
+/*         0x7ED6010EUL, 0x88286F54UL, 0x7FA90ABFUL, 0xE4C42212UL*/
+/*     );*/
+/*     VERIFY_CHECK(r1 != a);*/
+/*     VERIFY_CHECK(r2 != a);*/
+/*     secp256k1_scalar_mul_shift_var(&c1, a, &g1, 272);*/
+/*     secp256k1_scalar_mul_shift_var(&c2, a, &g2, 272);*/
+/*     secp256k1_scalar_mul(&c1, &c1, &minus_b1);*/
+/*     secp256k1_scalar_mul(&c2, &c2, &minus_b2);*/
+/*     secp256k1_scalar_add(r2, &c1, &c2);*/
+/*     secp256k1_scalar_mul(r1, r2, &minus_lambda);*/
+/*     secp256k1_scalar_add(r1, r1, a);*/
+/* }*/
+/* // }}}*/
+
+/* // {{{ other*/
+/* static int secp256k1_eckey_privkey_tweak_add(secp256k1_scalar *key, const secp256k1_scalar *tweak) {*/
+/*     secp256k1_scalar_add(key, key, tweak);*/
+/*     if (secp256k1_scalar_is_zero(key)) {*/
+/*         return 0;*/
+/*     }*/
+/*     return 1;*/
+/* }*/
+
+/* static int secp256k1_eckey_pubkey_tweak_add(const secp256k1_ecmult_context *ctx, secp256k1_ge *key, const secp256k1_scalar *tweak) {*/
+/*     secp256k1_gej pt;*/
+/*     secp256k1_scalar one;*/
+/*     secp256k1_gej_set_ge(&pt, key);*/
+/*     secp256k1_scalar_set_int(&one, 1);*/
+/*     secp256k1_ecmult(ctx, &pt, &pt, &one, tweak);*/
+
+/*     if (secp256k1_gej_is_infinity(&pt)) {*/
+/*         return 0;*/
+/*     }*/
+/*     secp256k1_ge_set_gej(key, &pt);*/
+/*     return 1;*/
+/* }*/
+
+/* static int secp256k1_eckey_privkey_tweak_mul(secp256k1_scalar *key, const secp256k1_scalar *tweak) {*/
+/*     if (secp256k1_scalar_is_zero(tweak)) {*/
+/*         return 0;*/
+/*     }*/
+
+/*     secp256k1_scalar_mul(key, key, tweak);*/
+/*     return 1;*/
+/* }*/
+
+/* static int secp256k1_eckey_pubkey_tweak_mul(const secp256k1_ecmult_context *ctx, secp256k1_ge *key, const secp256k1_scalar *tweak) {*/
+/*     secp256k1_scalar zero;*/
+/*     secp256k1_gej pt;*/
+/*     if (secp256k1_scalar_is_zero(tweak)) {*/
+/*         return 0;*/
+/*     }*/
+
+/*     secp256k1_scalar_set_int(&zero, 0);*/
+/*     secp256k1_gej_set_ge(&pt, key);*/
+/*     secp256k1_ecmult(ctx, &pt, &pt, tweak, &zero);*/
+/*     secp256k1_ge_set_gej(key, &pt);*/
+/*     return 1;*/
+/* }*/
+
+/* int secp256k1_ec_privkey_tweak_add(const secp256k1_context* ctx, unsigned char *seckey, const unsigned char *tweak) {*/
+/*     secp256k1_scalar term;*/
+/*     secp256k1_scalar sec;*/
+/*     int ret = 0;*/
+/*     int overflow = 0;*/
+/*     VERIFY_CHECK(ctx != NULL);*/
+/*     ARG_CHECK(seckey != NULL);*/
+/*     ARG_CHECK(tweak != NULL);*/
+/*     (void)ctx;*/
+
+/*     secp256k1_scalar_set_b32(&term, tweak, &overflow);*/
+/*     secp256k1_scalar_set_b32(&sec, seckey, NULL);*/
+
+/*     ret = !overflow && secp256k1_eckey_privkey_tweak_add(&sec, &term);*/
+/*     memset(seckey, 0, 32);*/
+/*     if (ret) {*/
+/*         secp256k1_scalar_get_b32(seckey, &sec);*/
+/*     }*/
+
+/*     secp256k1_scalar_clear(&sec);*/
+/*     secp256k1_scalar_clear(&term);*/
+/*     return ret;*/
+/* }*/
+
+/* int secp256k1_ec_pubkey_tweak_add(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *tweak) {*/
+/*     secp256k1_ge p;*/
+/*     secp256k1_scalar term;*/
+/*     int ret = 0;*/
+/*     int overflow = 0;*/
+/*     VERIFY_CHECK(ctx != NULL);*/
+/*     ARG_CHECK(secp256k1_ecmult_context_is_built(&ctx->ecmult_ctx));*/
+/*     ARG_CHECK(pubkey != NULL);*/
+/*     ARG_CHECK(tweak != NULL);*/
+
+/*     secp256k1_scalar_set_b32(&term, tweak, &overflow);*/
+/*     ret = !overflow && secp256k1_pubkey_load(ctx, &p, pubkey);*/
+/*     memset(pubkey, 0, sizeof(*pubkey));*/
+/*     if (ret) {*/
+/*         if (secp256k1_eckey_pubkey_tweak_add(&ctx->ecmult_ctx, &p, &term)) {*/
+/*             secp256k1_pubkey_save(pubkey, &p);*/
+/*         } else {*/
+/*             ret = 0;*/
+/*         }*/
+/*     }*/
+
+/*     return ret;*/
+/* }*/
+
+/* int secp256k1_ec_privkey_tweak_mul(const secp256k1_context* ctx, unsigned char *seckey, const unsigned char *tweak) {*/
+/*     secp256k1_scalar factor;*/
+/*     secp256k1_scalar sec;*/
+/*     int ret = 0;*/
+/*     int overflow = 0;*/
+/*     VERIFY_CHECK(ctx != NULL);*/
+/*     ARG_CHECK(seckey != NULL);*/
+/*     ARG_CHECK(tweak != NULL);*/
+/*     (void)ctx;*/
+
+/*     secp256k1_scalar_set_b32(&factor, tweak, &overflow);*/
+/*     secp256k1_scalar_set_b32(&sec, seckey, NULL);*/
+/*     ret = !overflow && secp256k1_eckey_privkey_tweak_mul(&sec, &factor);*/
+/*     memset(seckey, 0, 32);*/
+/*     if (ret) {*/
+/*         secp256k1_scalar_get_b32(seckey, &sec);*/
+/*     }*/
+
+/*     secp256k1_scalar_clear(&sec);*/
+/*     secp256k1_scalar_clear(&factor);*/
+/*     return ret;*/
+/* }*/
+
+/* int secp256k1_ec_pubkey_tweak_mul(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *tweak) {*/
+/*     secp256k1_ge p;*/
+/*     secp256k1_scalar factor;*/
+/*     int ret = 0;*/
+/*     int overflow = 0;*/
+/*     VERIFY_CHECK(ctx != NULL);*/
+/*     ARG_CHECK(secp256k1_ecmult_context_is_built(&ctx->ecmult_ctx));*/
+/*     ARG_CHECK(pubkey != NULL);*/
+/*     ARG_CHECK(tweak != NULL);*/
+
+/*     secp256k1_scalar_set_b32(&factor, tweak, &overflow);*/
+/*     ret = !overflow && secp256k1_pubkey_load(ctx, &p, pubkey);*/
+/*     memset(pubkey, 0, sizeof(*pubkey));*/
+/*     if (ret) {*/
+/*         if (secp256k1_eckey_pubkey_tweak_mul(&ctx->ecmult_ctx, &p, &factor)) {*/
+/*             secp256k1_pubkey_save(pubkey, &p);*/
+/*         } else {*/
+/*             ret = 0;*/
+/*         }*/
+/*     }*/
+
+/*     return ret;*/
+/* }*/
+/* // }}}*/

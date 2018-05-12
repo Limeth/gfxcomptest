@@ -25,6 +25,9 @@ fn main() -> ocl::Result<()> {
 
     let mut program_builder = ProgramBuilder::new();
 
+    // nVidia has source caching, but it isn't reliable when using #include
+    #[cfg(debug_assertions)]
+    std::env::set_var("CUDA_CACHE_DISABLE", "1");
     program_builder.cmplr_opt("-cl-std=CL2.0");
     program_builder.src(include_str!("shader/kernel.cl"));
 
