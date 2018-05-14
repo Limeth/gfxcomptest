@@ -19,9 +19,9 @@ fn main() -> ocl::Result<()> {
     let mut secp256k1 = Secp256k1Context::new();
     let (ctx_arg, chunks) = secp256k1.copied_without_pointers();
 
-    debug!("host", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx_arg.ecmult_gen_ctx.blind.d[0]);
-    debug!("host", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx_arg.ecmult_gen_ctx.initial.infinity);
-    debug!("host", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx_arg.ecmult_gen_ctx.initial.x.n[0]);
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx_arg.ecmult_gen_ctx.blind.d[0]);
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx_arg.ecmult_gen_ctx.initial.infinity);
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx_arg.ecmult_gen_ctx.initial.x.n[0]);
 
     let mut program_builder = ProgramBuilder::new();
 
@@ -29,8 +29,11 @@ fn main() -> ocl::Result<()> {
     #[cfg(debug_assertions)]
     std::env::set_var("CUDA_CACHE_DISABLE", "1");
     program_builder.cmplr_opt("-cl-std=CL2.0");
+    #[cfg(debug_assertions)]
+    program_builder.cmplr_def("DEBUG_ASSERTIONS", 1);
     program_builder.src(include_str!("shader/kernel.cl"));
 
+    println!("Compiling shader, this may take a while...");
     let pro_que: ProQue = ProQue::builder()
         .prog_bldr(program_builder)
         .dims(3)

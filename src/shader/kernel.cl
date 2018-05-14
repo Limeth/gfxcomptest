@@ -16,11 +16,18 @@
 #include "src/shader/std.cl"
 #include "src/shader/secp256k1.cl"
 #include "src/shader/keccak.cl"
+#include "src/shader/atomic.cl"
 
 #define ADDRESS_LENGTH 40
 #define ADDRESS_BYTES (ADDRESS_LENGTH / 2)
 #define KECCAK_OUTPUT_BYTES 32
 #define ADDRESS_BYTE_INDEX (KECCAK_OUTPUT_BYTES - ADDRESS_BYTES)
+
+#ifdef DEBUG_ASSERTIONS
+# define DEBUG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+# define DEBUG(fmt, ...)
+#endif
 
 typedef struct {
     uint *input;
@@ -44,7 +51,7 @@ static global secp256k1_context context;
 
 // only literal strings may be passed to printf
 #define hexdump(label, pointer, bytes) do { \
-    printf("[device] %s hexdump:", label); \
+    DEBUG("[device] %s hexdump:", label); \
     hexdump_impl(pointer, bytes); \
 } while(0)
 
@@ -86,7 +93,7 @@ void initialize_context(arguments *args) {
 }
 
 void branch_loading_context_atomic(arguments *args) {
-    printf("loading_context_atomic\n");
+    /* printf("loading_context_atomic\n"); */
 
     if (loading_index == 0) {
         initialize_context(args);
@@ -126,7 +133,7 @@ void branch_loading_context(arguments *args) {
         branch_loading_context_atomic(args);
     }
 
-    work_group_barrier(CLK_GLOBAL_MEM_FENCE);
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
 }
 
 void run_eckey_edge_case_test(secp256k1_context *ctx) {
@@ -424,24 +431,22 @@ void print_address(char *address) {
 void branch_running(arguments *args) {
     size_t i = get_global_id(0);
 
-    printf("running in parallel\n");
-
-    if (i == 0) {
-        /* run_eckey_edge_case_test(&context); */
-    }
+    /* if (i == 0) { */
+    /*     run_eckey_edge_case_test(&context); */
+    /* } */
 
     if (i != 2) {
         return;
     }
 
     // needs to be 33 bytes for some reason
-    uchar seckey[33] = { 0 };
+    uchar seckey[32] = { 0 };
     seckey[31] = i;
 
     int result = secp256k1_ec_seckey_verify(&context, (const uchar*) seckey);
 
     if (result == 0) {
-        printf("%llu result: %i\n", i, result);
+        printf("Core %i result: invalid private key\n", i);
         return;
     }
 
@@ -449,33 +454,29 @@ void branch_running(arguments *args) {
 
     secp256k1_ec_pubkey_create(&context, &pubkey, (const uchar*) seckey);
 
-    hexdump("pubkey raw", (void*) &pubkey.data, 64);
+    /* hexdump("pubkey raw", (void*) &pubkey.data, 64); */
 
+    // Public key bytes WITH the leading 0x04 byte
     uchar output[65] = { 0 };
     size_t outputlen = 65;
+
+    secp256k1_ec_pubkey_serialize(&context, (uchar*) output, &outputlen, &pubkey, SECP256K1_EC_UNCOMPRESSED);
+
+    // Public key bytes WITHOUT the leading 0x04 byte
     uchar *public_key_array = ((uchar*) output) + 1;
 
-    /* secp256k1_ec_pubkey_serialize(&context, (uchar*) output, &outputlen, &pubkey, SECP256K1_EC_UNCOMPRESSED); */
-
-    public_key_array[3] = 3;
-    public_key_array[4] = 4;
-    public_key_array[17] = 17;
-    public_key_array[29] = 29;
-    public_key_array[51] = 51;
-    public_key_array[63] = 63;
-
-    hexdump("pubkey ser", public_key_array, 64);
+    /* hexdump("pubkey ser", public_key_array, 64); */
 
     keccak_result hash = keccak256(public_key_array, 64);
 
-    hexdump("keccak", (void*) hash.array, BITS / 8);
+    /* hexdump("keccak", (void*) hash.array, BITS / 8); */
 
     char address[42] = { '0', 'x' };
 
     to_hex_string(&hash.array[ADDRESS_BYTE_INDEX], ADDRESS_BYTES, address + 2);
+    printf("Core %i result: ", i);
     print_address(address);
     printf("\n");
-    printf("%llu result: %i\n", i, result);
 }
 
 kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_arg, global secp256k1_ecmult_context_chunk *chunk) {

@@ -228,19 +228,19 @@ impl Secp256k1Context {
     pub fn copied_without_pointers(&mut self) -> (secp256k1_context_struct_arg, Box<[secp256k1_ecmult_context_chunk; ECMULT_TABLE_CHUNKS]>) {
         let ctx: &mut secp256k1_context_struct = unsafe { mem::transmute(self.ctx) };
 
-        println!("ctx: {:#?}", ctx);
+        // println!("ctx: {:#?}", ctx);
 
-        Self::hexdump(ctx, mem::size_of::<secp256k1_context_struct>());
-        Self::hexdump(ctx.ecmult_ctx.pre_g, 16);
+        // Self::hexdump(ctx, mem::size_of::<secp256k1_context_struct>());
+        // Self::hexdump(ctx.ecmult_ctx.pre_g, 16);
 
-        debug!("const", "WINDOW_G", WINDOW_G);
-        debug!("const", "ECMULT_TABLE_SIZE", ECMULT_TABLE_SIZE);
-        debug!("const", "ECMULT_TABLE_CHUNK_LEN", ECMULT_TABLE_CHUNK_LEN);
-        debug!("const", "ECMULT_TABLE_CHUNKS", ECMULT_TABLE_CHUNKS);
-        unsafe { debug!("origin", "(&*ctx.ecmult_ctx.pre_g)[0].x.n[0])", (&*ctx.ecmult_ctx.pre_g)[0].x.n[0]); }
-        debug!("origin", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx.ecmult_gen_ctx.blind.d[0]);
-        debug!("origin", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx.ecmult_gen_ctx.initial.infinity);
-        debug!("origin", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx.ecmult_gen_ctx.initial.x.n[0]);
+        // debug!("const", "WINDOW_G", WINDOW_G);
+        // debug!("const", "ECMULT_TABLE_SIZE", ECMULT_TABLE_SIZE);
+        // debug!("const", "ECMULT_TABLE_CHUNK_LEN", ECMULT_TABLE_CHUNK_LEN);
+        // debug!("const", "ECMULT_TABLE_CHUNKS", ECMULT_TABLE_CHUNKS);
+        // unsafe { debug!("origin", "(&*ctx.ecmult_ctx.pre_g)[0].x.n[0])", (&*ctx.ecmult_ctx.pre_g)[0].x.n[0]); }
+        // debug!("origin", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx.ecmult_gen_ctx.blind.d[0]);
+        // debug!("origin", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx.ecmult_gen_ctx.initial.infinity);
+        // debug!("origin", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx.ecmult_gen_ctx.initial.x.n[0]);
 
         let ecmult_gen_ctx = &mut ctx.ecmult_gen_ctx;
         let prec: &mut [[secp256k1_ge_storage; 16]; 64] = unsafe { &mut *ecmult_gen_ctx.prec };
