@@ -22,38 +22,100 @@
 #define ADDRESS_BYTES (ADDRESS_LENGTH / 2)
 #define KECCAK_OUTPUT_BYTES 32
 #define ADDRESS_BYTE_INDEX (KECCAK_OUTPUT_BYTES - ADDRESS_BYTES)
+#define PATTERN_CHUNK_BYTES 1000
 
 #ifdef DEBUG_ASSERTIONS
-# define DEBUG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+# define DEBUG(fmt, arg) printf("[DEVICE DEBUG] " fmt, arg)
 #else
-# define DEBUG(fmt, ...)
+# define DEBUG(fmt, arg)
 #endif
+
+enum state {
+    STATE_LOADING_CONTEXT,
+    STATE_LOADING_DICTIONARY,
+    STATE_RUNNING,
+};
+
+typedef struct {
+    char patterns_of_length_01[PATTERNS_OF_LENGTH_01][ 1];
+    char patterns_of_length_02[PATTERNS_OF_LENGTH_02][ 2];
+    char patterns_of_length_03[PATTERNS_OF_LENGTH_03][ 3];
+    char patterns_of_length_04[PATTERNS_OF_LENGTH_04][ 4];
+    char patterns_of_length_05[PATTERNS_OF_LENGTH_05][ 5];
+    char patterns_of_length_06[PATTERNS_OF_LENGTH_06][ 6];
+    char patterns_of_length_07[PATTERNS_OF_LENGTH_07][ 7];
+    char patterns_of_length_08[PATTERNS_OF_LENGTH_08][ 8];
+    char patterns_of_length_09[PATTERNS_OF_LENGTH_09][ 9];
+    char patterns_of_length_10[PATTERNS_OF_LENGTH_10][10];
+    char patterns_of_length_11[PATTERNS_OF_LENGTH_11][11];
+    char patterns_of_length_12[PATTERNS_OF_LENGTH_12][12];
+    char patterns_of_length_13[PATTERNS_OF_LENGTH_13][13];
+    char patterns_of_length_14[PATTERNS_OF_LENGTH_14][14];
+    char patterns_of_length_15[PATTERNS_OF_LENGTH_15][15];
+    char patterns_of_length_16[PATTERNS_OF_LENGTH_16][16];
+    char patterns_of_length_17[PATTERNS_OF_LENGTH_17][17];
+    char patterns_of_length_18[PATTERNS_OF_LENGTH_18][18];
+    char patterns_of_length_19[PATTERNS_OF_LENGTH_19][19];
+    char patterns_of_length_20[PATTERNS_OF_LENGTH_20][20];
+    char patterns_of_length_21[PATTERNS_OF_LENGTH_21][21];
+    char patterns_of_length_22[PATTERNS_OF_LENGTH_22][22];
+    char patterns_of_length_23[PATTERNS_OF_LENGTH_23][23];
+    char patterns_of_length_24[PATTERNS_OF_LENGTH_24][24];
+    char patterns_of_length_25[PATTERNS_OF_LENGTH_25][25];
+    char patterns_of_length_26[PATTERNS_OF_LENGTH_26][26];
+    char patterns_of_length_27[PATTERNS_OF_LENGTH_27][27];
+    char patterns_of_length_28[PATTERNS_OF_LENGTH_28][28];
+    char patterns_of_length_29[PATTERNS_OF_LENGTH_29][29];
+    char patterns_of_length_30[PATTERNS_OF_LENGTH_30][30];
+    char patterns_of_length_31[PATTERNS_OF_LENGTH_31][31];
+    char patterns_of_length_32[PATTERNS_OF_LENGTH_32][32];
+    char patterns_of_length_33[PATTERNS_OF_LENGTH_33][33];
+    char patterns_of_length_34[PATTERNS_OF_LENGTH_34][34];
+    char patterns_of_length_35[PATTERNS_OF_LENGTH_35][35];
+    char patterns_of_length_36[PATTERNS_OF_LENGTH_36][36];
+    char patterns_of_length_37[PATTERNS_OF_LENGTH_37][37];
+    char patterns_of_length_38[PATTERNS_OF_LENGTH_38][38];
+    char patterns_of_length_39[PATTERNS_OF_LENGTH_39][39];
+    char patterns_of_length_40[PATTERNS_OF_LENGTH_40][40];
+    char *patterns_of_length[40];
+} pattern_dictionary;
+
+typedef struct {
+    // The length of the patterns in the `patterns` field
+    uint pattern_length;
+    // The number of patterns in the `patterns` field
+    uint pattern_count;
+    // The offset in the patterns array
+    uint pattern_offset;
+    // The patterns, in bytes.
+    char patterns[PATTERN_CHUNK_BYTES];
+} patterns_chunk;
 
 typedef struct {
     uint *input;
     secp256k1_context_arg *ctx_arg;
+    patterns_chunk *patterns_chunk_buffer;
     secp256k1_ecmult_context_chunk *chunk;
 } arguments;
 
-enum state {
-    STATE_LOADING_CONTEXT,
-    STATE_RUNNING,
-};
-
 static global bool state = STATE_LOADING_CONTEXT;
-
 static global uint loading_index = 0;
 static global secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
 #ifdef USE_ENDOMORPHISM
 static global secp256k1_ge_storage pre_g_128[ECMULT_TABLE_SIZE(WINDOW_G)];
 #endif
 static global secp256k1_context context;
+static global pattern_dictionary dictionary;
 
 // only literal strings may be passed to printf
-#define hexdump(label, pointer, bytes) do { \
-    DEBUG("[device] %s hexdump:", label); \
-    hexdump_impl(pointer, bytes); \
-} while(0)
+#ifdef DEBUG_ASSERTIONS
+#   define hexdump(label, pointer, bytes) do { \
+        DEBUG("%s hexdump:", label); \
+        hexdump_impl(pointer, bytes); \
+    } while(0)
+#else
+#   define hexdump(label, pointer, bytes)
+#endif
 
 void hexdump_impl(void *pointer, size_t bytes) {
     for (size_t offset = 0; offset < bytes; offset++) {
@@ -68,6 +130,46 @@ void hexdump_impl(void *pointer, size_t bytes) {
     }
 
     printf("\n");
+}
+
+#define PRINT_CHARACTER(literal, variable) do { \
+    if (variable == literal[0]) { \
+        printf(literal); \
+    } \
+} while (0)
+
+void print_address_len(char *address, size_t len) {
+    if (address[1] == 'x' && address[0] == '0') {
+        len += 2;
+    }
+
+    for (size_t offset = 0; offset < len; offset++) {
+        char character = address[offset];
+
+        CHECK(character >= '0' && character <= '9' || character >= 'a' && character <= 'f' || character == 'x');
+
+        PRINT_CHARACTER("0", character);
+        PRINT_CHARACTER("1", character);
+        PRINT_CHARACTER("2", character);
+        PRINT_CHARACTER("3", character);
+        PRINT_CHARACTER("4", character);
+        PRINT_CHARACTER("5", character);
+        PRINT_CHARACTER("6", character);
+        PRINT_CHARACTER("7", character);
+        PRINT_CHARACTER("8", character);
+        PRINT_CHARACTER("9", character);
+        PRINT_CHARACTER("a", character);
+        PRINT_CHARACTER("b", character);
+        PRINT_CHARACTER("c", character);
+        PRINT_CHARACTER("d", character);
+        PRINT_CHARACTER("e", character);
+        PRINT_CHARACTER("f", character);
+        PRINT_CHARACTER("x", character);
+    }
+}
+
+void print_address(char *address) {
+    print_address_len(address, 40);
 }
 
 void initialize_context(arguments *args) {
@@ -114,7 +216,8 @@ void branch_loading_context_atomic(arguments *args) {
     loading_index++;
 
     if (upper_bound >= ECMULT_TABLE_SIZE(WINDOW_G)) {
-        state = STATE_RUNNING;
+        state = STATE_LOADING_DICTIONARY;
+        loading_index = 0;
 
         hexdump("context", &context, sizeof(secp256k1_context));
         hexdump("first 16 bytes of pre_g", context.ecmult_ctx.pre_g, 16);
@@ -131,6 +234,98 @@ void branch_loading_context(arguments *args) {
 
     if (i == 0) {
         branch_loading_context_atomic(args);
+    }
+
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+}
+
+void initialize_dictionary() {
+    dictionary = (pattern_dictionary) {};
+
+    dictionary.patterns_of_length[ 0] = (char *__global) dictionary.patterns_of_length_01;
+    dictionary.patterns_of_length[ 1] = (char *__global) dictionary.patterns_of_length_02;
+    dictionary.patterns_of_length[ 2] = (char *__global) dictionary.patterns_of_length_03;
+    dictionary.patterns_of_length[ 3] = (char *__global) dictionary.patterns_of_length_04;
+    dictionary.patterns_of_length[ 4] = (char *__global) dictionary.patterns_of_length_05;
+    dictionary.patterns_of_length[ 5] = (char *__global) dictionary.patterns_of_length_06;
+    dictionary.patterns_of_length[ 6] = (char *__global) dictionary.patterns_of_length_07;
+    dictionary.patterns_of_length[ 7] = (char *__global) dictionary.patterns_of_length_08;
+    dictionary.patterns_of_length[ 8] = (char *__global) dictionary.patterns_of_length_09;
+    dictionary.patterns_of_length[ 9] = (char *__global) dictionary.patterns_of_length_10;
+    dictionary.patterns_of_length[10] = (char *__global) dictionary.patterns_of_length_11;
+    dictionary.patterns_of_length[11] = (char *__global) dictionary.patterns_of_length_12;
+    dictionary.patterns_of_length[12] = (char *__global) dictionary.patterns_of_length_13;
+    dictionary.patterns_of_length[13] = (char *__global) dictionary.patterns_of_length_14;
+    dictionary.patterns_of_length[14] = (char *__global) dictionary.patterns_of_length_15;
+    dictionary.patterns_of_length[15] = (char *__global) dictionary.patterns_of_length_16;
+    dictionary.patterns_of_length[16] = (char *__global) dictionary.patterns_of_length_17;
+    dictionary.patterns_of_length[17] = (char *__global) dictionary.patterns_of_length_18;
+    dictionary.patterns_of_length[18] = (char *__global) dictionary.patterns_of_length_19;
+    dictionary.patterns_of_length[19] = (char *__global) dictionary.patterns_of_length_20;
+    dictionary.patterns_of_length[20] = (char *__global) dictionary.patterns_of_length_21;
+    dictionary.patterns_of_length[21] = (char *__global) dictionary.patterns_of_length_22;
+    dictionary.patterns_of_length[22] = (char *__global) dictionary.patterns_of_length_23;
+    dictionary.patterns_of_length[23] = (char *__global) dictionary.patterns_of_length_24;
+    dictionary.patterns_of_length[24] = (char *__global) dictionary.patterns_of_length_25;
+    dictionary.patterns_of_length[25] = (char *__global) dictionary.patterns_of_length_26;
+    dictionary.patterns_of_length[26] = (char *__global) dictionary.patterns_of_length_27;
+    dictionary.patterns_of_length[27] = (char *__global) dictionary.patterns_of_length_28;
+    dictionary.patterns_of_length[28] = (char *__global) dictionary.patterns_of_length_29;
+    dictionary.patterns_of_length[29] = (char *__global) dictionary.patterns_of_length_30;
+    dictionary.patterns_of_length[30] = (char *__global) dictionary.patterns_of_length_31;
+    dictionary.patterns_of_length[31] = (char *__global) dictionary.patterns_of_length_32;
+    dictionary.patterns_of_length[32] = (char *__global) dictionary.patterns_of_length_33;
+    dictionary.patterns_of_length[33] = (char *__global) dictionary.patterns_of_length_34;
+    dictionary.patterns_of_length[34] = (char *__global) dictionary.patterns_of_length_35;
+    dictionary.patterns_of_length[35] = (char *__global) dictionary.patterns_of_length_36;
+    dictionary.patterns_of_length[36] = (char *__global) dictionary.patterns_of_length_37;
+    dictionary.patterns_of_length[37] = (char *__global) dictionary.patterns_of_length_38;
+    dictionary.patterns_of_length[38] = (char *__global) dictionary.patterns_of_length_39;
+    dictionary.patterns_of_length[39] = (char *__global) dictionary.patterns_of_length_40;
+}
+
+bool dictionary_loading_finished(arguments *args) {
+    patterns_chunk *arg = args->patterns_chunk_buffer;
+
+    return arg->pattern_length == 0 && arg->pattern_count == 0 && arg->pattern_offset == 0;
+}
+
+void branch_loading_dictionary_atomic(arguments *args) {
+    if (loading_index == 0) {
+        initialize_dictionary();
+    }
+
+    loading_index++;
+
+    if (dictionary_loading_finished(args)) {
+        state = STATE_RUNNING;
+        loading_index = 0;
+        return;
+    }
+
+    patterns_chunk *arg = args->patterns_chunk_buffer;
+
+    /* printf("_\n"); */
+    /* printf("pattern_length: %u\n", arg->pattern_length); */
+    /* printf("pattern_offset: %u\n", arg->pattern_offset); */
+    /* printf("pattern_count: %u\n", arg->pattern_count); */
+
+    memcpy(&dictionary.patterns_of_length[arg->pattern_length - 1][arg->pattern_offset],
+           arg->patterns,
+           arg->pattern_length * arg->pattern_count);
+
+#ifdef DEBUG_ASSERTIONS
+    DEBUG("Loaded pattern: ", NULL);
+    print_address_len(&dictionary.patterns_of_length[arg->pattern_length - 1][arg->pattern_offset], arg->pattern_length);
+    printf("\n");
+#endif
+}
+
+void branch_loading_dictionary(arguments *args) {
+    size_t i = get_global_id(0);
+
+    if (i == 0) {
+        branch_loading_dictionary_atomic(args);
     }
 
     work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
@@ -390,44 +585,6 @@ void to_hex_string(uchar *slice, size_t slice_len, char *result) {
     }
 }
 
-#define PRINT_CHARACTER(literal, variable) do { \
-    if (variable == literal[0]) { \
-        printf(literal); \
-    } \
-} while (0)
-
-void print_address(char *address) {
-    size_t len = 40;
-
-    if (address[1] == 'x' && address[0] == '0') {
-        len += 2;
-    }
-
-    for (size_t offset = 0; offset < len; offset++) {
-        char character = address[offset];
-
-        CHECK(character >= '0' && character <= '9' || character >= 'a' && character <= 'f' || character == 'x');
-
-        PRINT_CHARACTER("0", character);
-        PRINT_CHARACTER("1", character);
-        PRINT_CHARACTER("2", character);
-        PRINT_CHARACTER("3", character);
-        PRINT_CHARACTER("4", character);
-        PRINT_CHARACTER("5", character);
-        PRINT_CHARACTER("6", character);
-        PRINT_CHARACTER("7", character);
-        PRINT_CHARACTER("8", character);
-        PRINT_CHARACTER("9", character);
-        PRINT_CHARACTER("a", character);
-        PRINT_CHARACTER("b", character);
-        PRINT_CHARACTER("c", character);
-        PRINT_CHARACTER("d", character);
-        PRINT_CHARACTER("e", character);
-        PRINT_CHARACTER("f", character);
-        PRINT_CHARACTER("x", character);
-    }
-}
-
 void branch_running(arguments *args) {
     size_t i = get_global_id(0);
 
@@ -479,16 +636,20 @@ void branch_running(arguments *args) {
     printf("\n");
 }
 
-kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_arg, global secp256k1_ecmult_context_chunk *chunk) {
+kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_arg, global patterns_chunk *patterns_chunk_buffer, global secp256k1_ecmult_context_chunk *chunk) {
     arguments args = (arguments) {
         .input = input,
         .ctx_arg = ctx_arg,
+        .patterns_chunk_buffer = patterns_chunk_buffer,
         .chunk = chunk,
     };
 
     switch (state) {
         case STATE_LOADING_CONTEXT:
             branch_loading_context(&args);
+            break;
+        case STATE_LOADING_DICTIONARY:
+            branch_loading_dictionary(&args);
             break;
         case STATE_RUNNING:
             branch_running(&args);
