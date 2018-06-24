@@ -18,6 +18,7 @@
 #include "src/shader/keccak.cl"
 #include "src/shader/atomic.cl"
 
+#define SECRET_KEY_BYTES 32
 #define ADDRESS_LENGTH 40
 #define ADDRESS_BYTES (ADDRESS_LENGTH / 2)
 #define KECCAK_OUTPUT_BYTES 32
@@ -30,11 +31,21 @@
 # define DEBUG(fmt, arg)
 #endif
 
+void run_eckey_edge_case_test(secp256k1_context *ctx);
+
 enum state {
     STATE_LOADING_CONTEXT,
     STATE_LOADING_DICTIONARY,
     STATE_RUNNING,
 };
+
+typedef struct {
+    uchar array[SECRET_KEY_BYTES];
+} secret_key_t;
+
+typedef struct {
+    uchar array[ADDRESS_BYTES];
+} address_t;
 
 typedef struct {
     char patterns_of_length_01[PATTERNS_OF_LENGTH_01][ 1];
@@ -92,7 +103,7 @@ typedef struct {
 } patterns_chunk;
 
 typedef struct {
-    uint *input;
+    /* uint *input; */
     secp256k1_context_arg *ctx_arg;
     patterns_chunk *patterns_chunk_buffer;
     secp256k1_ecmult_context_chunk *chunk;
@@ -138,11 +149,7 @@ void hexdump_impl(void *pointer, size_t bytes) {
     } \
 } while (0)
 
-void print_address_len(char *address, size_t len) {
-    if (address[1] == 'x' && address[0] == '0') {
-        len += 2;
-    }
-
+void print_address_bytes_len(char *address, size_t len) {
     for (size_t offset = 0; offset < len; offset++) {
         char character = address[offset];
 
@@ -168,8 +175,59 @@ void print_address_len(char *address, size_t len) {
     }
 }
 
-void print_address(char *address) {
-    print_address_len(address, 40);
+void print_address_bytes(char *address, bool includeHexPrefix) {
+    print_address_bytes_len(address, ADDRESS_LENGTH + (includeHexPrefix ? 2 : 0));
+}
+
+inline char hex_digit_to_char(uchar byte) {
+#ifdef DEBUG_ASSERTIONS
+    if (byte < 10) {
+        return '0' + byte;
+    } else if (byte < 16) {
+        return 'a' + (byte - 10);
+    } else {
+        printf("Invalid hex digit of value `%u`\n", byte);
+        abort();
+        return 0;
+    }
+#else
+    if (byte < 10) {
+        return '0' + byte;
+    } else {
+        return 'a' + (byte - 10);
+    }
+#endif
+}
+
+void to_hex_string(uchar *slice, size_t slice_len, char *result) {
+    for (size_t offset = 0; offset < slice_len; offset++) {
+        uchar byte = slice[offset];
+        size_t result_index = offset * 2;
+
+        result[result_index + 0] = hex_digit_to_char(byte >>  4);
+        result[result_index + 1] = hex_digit_to_char(byte & 0xF);
+    }
+}
+
+void serialize_address(char *result, address_t *address, bool includeHexPrefix) {
+    if (includeHexPrefix) {
+        result[0] = '0';
+        result[1] = 'x';
+    }
+
+    to_hex_string((uchar*) &address->array, ADDRESS_BYTES, result + (includeHexPrefix ? 2 : 0));
+}
+
+void print_address(address_t *address, bool includeHexPrefix) {
+    if (includeHexPrefix) {
+        char serialized[ADDRESS_LENGTH + 2] = { 0 };
+        serialize_address((char*) &serialized, address, true);
+        print_address_bytes((char*) &serialized, true);
+    } else {
+        char serialized[ADDRESS_LENGTH] = { 0 };
+        serialize_address((char*) &serialized, address, false);
+        print_address_bytes((char*) &serialized, false);
+    }
 }
 
 void initialize_context(arguments *args) {
@@ -226,6 +284,11 @@ void branch_loading_context_atomic(arguments *args) {
         hexdump("last 16 bytes of pre_g", ((uchar*) context.ecmult_ctx.pre_g) + (ECMULT_TABLE_SIZE(WINDOW_G)) * sizeof(secp256k1_ge_storage) - 16, 16);
         hexdump("last 16 bytes of pre_g_128", ((uchar*) context.ecmult_ctx.pre_g_128) + (ECMULT_TABLE_SIZE(WINDOW_G)) * sizeof(secp256k1_ge_storage) - 16, 16);
         hexdump("last 16 bytes of prec", ((uchar*) context.ecmult_gen_ctx.prec) + (16 * 64) * sizeof(secp256k1_ge_storage) - 16, 16);
+
+#ifdef DEBUG_ASSERTIONS
+        // Takes really long to compile, commented out to speed up development
+        /* run_eckey_edge_case_test(&context); */
+#endif
     }
 }
 
@@ -316,7 +379,7 @@ void branch_loading_dictionary_atomic(arguments *args) {
 
 #ifdef DEBUG_ASSERTIONS
     DEBUG("Loaded pattern: ", NULL);
-    print_address_len(&dictionary.patterns_of_length[arg->pattern_length - 1][arg->pattern_offset], arg->pattern_length);
+    print_address_bytes_len(&dictionary.patterns_of_length[arg->pattern_length - 1][arg->pattern_offset], arg->pattern_length);
     printf("\n");
 #endif
 }
@@ -567,49 +630,14 @@ void run_eckey_edge_case_test(secp256k1_context *ctx) {
     /* /1* secp256k1_context_set_illegal_callback(ctx, NULL, NULL); *1/ */
 }
 
-inline char hex_digit_to_char(uchar byte) {
-    if (byte <= 9) {
-        return '0' + byte;
-    } else {
-        return 'a' + (byte - 10);
-    }
+bool is_secret_key_valid(secret_key_t *seckey) {
+    return secp256k1_ec_seckey_verify(&context, (const uchar*) &seckey->array) != 0;
 }
 
-void to_hex_string(uchar *slice, size_t slice_len, char *result) {
-    for (size_t offset = 0; offset < slice_len; offset++) {
-        uchar byte = slice[offset];
-        size_t result_index = offset * 2;
-
-        result[result_index + 0] = hex_digit_to_char(byte >>  4);
-        result[result_index + 1] = hex_digit_to_char(byte & 0xF);
-    }
-}
-
-void branch_running(arguments *args) {
-    size_t i = get_global_id(0);
-
-    /* if (i == 0) { */
-    /*     run_eckey_edge_case_test(&context); */
-    /* } */
-
-    if (i != 2) {
-        return;
-    }
-
-    // needs to be 33 bytes for some reason
-    uchar seckey[32] = { 0 };
-    seckey[31] = i;
-
-    int result = secp256k1_ec_seckey_verify(&context, (const uchar*) seckey);
-
-    if (result == 0) {
-        printf("Core %i result: invalid private key\n", i);
-        return;
-    }
-
+address_t derive_address(secret_key_t *seckey) {
     secp256k1_pubkey pubkey;
 
-    secp256k1_ec_pubkey_create(&context, &pubkey, (const uchar*) seckey);
+    secp256k1_ec_pubkey_create(&context, &pubkey, (const uchar*) &seckey->array);
 
     /* hexdump("pubkey raw", (void*) &pubkey.data, 64); */
 
@@ -628,17 +656,45 @@ void branch_running(arguments *args) {
 
     /* hexdump("keccak", (void*) hash.array, BITS / 8); */
 
-    char address[42] = { '0', 'x' };
+    address_t address;
 
-    to_hex_string(&hash.array[ADDRESS_BYTE_INDEX], ADDRESS_BYTES, address + 2);
+    memcpy(&address.array, &hash.array[ADDRESS_BYTE_INDEX], ADDRESS_BYTES);
+
+    return address;
+}
+
+void branch_running(arguments *args) {
+    size_t i = get_global_id(0);
+
+    printf("%i\n", i);
+
+    if (i != 2) {
+        return;
+    }
+
+    // might need to be 33 bytes for some reason
+    secret_key_t seckey = (secret_key_t) {
+        .array = { 0 },
+    };
+
+    seckey.array[31] = i;
+
+    if (!is_secret_key_valid(&seckey)) {
+        printf("Core %i result: invalid private key\n", i);
+        return;
+    }
+
+    address_t address = derive_address(&seckey);
+
     printf("Core %i result: ", i);
-    print_address(address);
+    print_address(&address, true);
     printf("\n");
 }
 
-kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_arg, global patterns_chunk *patterns_chunk_buffer, global secp256k1_ecmult_context_chunk *chunk) {
+__attribute__((reqd_work_group_size(WORK_GROUP_SIZE_X, WORK_GROUP_SIZE_Y, WORK_GROUP_SIZE_Z)))
+kernel void entry_point(/*global uint *input, */global secp256k1_context_arg *ctx_arg, global patterns_chunk *patterns_chunk_buffer, global secp256k1_ecmult_context_chunk *chunk) {
     arguments args = (arguments) {
-        .input = input,
+        /* .input = input, */
         .ctx_arg = ctx_arg,
         .patterns_chunk_buffer = patterns_chunk_buffer,
         .chunk = chunk,
@@ -656,5 +712,11 @@ kernel void entry_point(global uint *input, global secp256k1_context_arg *ctx_ar
             break;
     }
 
-    input[get_global_id(0)]++;
+    printf("global_id: %lu\tlocal_id: %lu\n", get_global_id(0), get_local_id(0));
+
+    if (get_global_id(0) == 0) {
+        printf("global_size: %lu\tlocal_size: %lu\n", get_global_size(0), get_local_size(0));
+    }
+
+    /* input[get_global_id(0)]++; */
 }

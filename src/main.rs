@@ -8,12 +8,18 @@ use context::secp256k1_context_struct_arg;
 use context::secp256k1_ecmult_context_chunk;
 use context::Secp256k1Context;
 use context::ECMULT_TABLE_CHUNKS;
+use ocl::SpatialDims;
+use ocl::core::types::abs::DeviceId;
+use ocl::enums::{ContextInfo, ContextInfoResult, DeviceInfo, DeviceInfoResult};
+use ocl::Context;
 use ocl::ProQue;
 use ocl::builders::ProgramBuilder;
 use ocl::flags::MemFlags;
 use ocl::traits::OclPrm;
-use secp256k1::ffi::Context;
 use std::fmt;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 const ADDRESS_LENGTH: usize = 40;
 const PATTERN_CHUNK_BYTES: usize = 1000;
@@ -38,86 +44,8 @@ fn main() -> ocl::Result<()> {
     let mut secp256k1 = Secp256k1Context::new();
     let (ctx_arg, chunks) = secp256k1.copied_without_pointers();
 
-    let patterns = vec!["coffee", "cocoa", "abcd", "deadbeef"];
-    let mut patterns_by_length: [Vec<String>; ADDRESS_LENGTH] = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-
-    for pattern in patterns {
-        if pattern.is_empty() {
-            continue;
-        }
-
-        patterns_by_length[pattern.len() - 1].push(pattern.to_string());
-    }
-
-    for patterns in &mut patterns_by_length[..] {
-        patterns.sort();
-    }
-
-    // debug!("host", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx_arg.ecmult_gen_ctx.blind.d[0]);
-    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx_arg.ecmult_gen_ctx.initial.infinity);
-    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx_arg.ecmult_gen_ctx.initial.x.n[0]);
-
-    let mut program_builder = ProgramBuilder::new();
-
-    // nVidia has source caching, but it isn't reliable when using #include
-    #[cfg(debug_assertions)]
-    std::env::set_var("CUDA_CACHE_DISABLE", "1");
-    program_builder.cmplr_opt("-cl-std=CL2.0");
-    #[cfg(debug_assertions)]
-    program_builder.cmplr_def("DEBUG_ASSERTIONS", 1);
-
-    for (pattern_length, patterns) in (&mut patterns_by_length[..]).into_iter().enumerate().map(|(i, patterns)| (i + 1, patterns)) {
-        program_builder.cmplr_def(format!("PATTERNS_OF_LENGTH_{:02}", pattern_length), patterns.len() as i32);
-    }
-
-    program_builder.src(include_str!("shader/kernel.cl"));
-
-    println!("Compiling shader, this may take a while...");
-    let pro_que: ProQue = ProQue::builder()
-        .prog_bldr(program_builder)
-        .dims(3)
-        .build()?;
-    let buffer = pro_que.create_buffer::<u32>()?;
-    // let ctx_buffer = pro_que.create_buffer::<secp256k1_context_struct_arg>()?;
-    let ctx_buffer = pro_que.buffer_builder::<secp256k1_context_struct_arg>()
-        .flags(MemFlags::READ_ONLY)
-        .build()?;
-    let patterns_buffer = pro_que.buffer_builder::<patterns_chunk>()
-        .flags(MemFlags::READ_ONLY)
-        .build()?;
-    let chunk_buffer = pro_que.buffer_builder::<secp256k1_ecmult_context_chunk>()
-        .flags(MemFlags::READ_ONLY)
-        .build()?;
-    // let ctx_buffer = pro_que.buffer_builder::<u64>()
-    //     .flags(MemFlags::READ_ONLY)
-    //     .build()?;
-    let kernel = pro_que.kernel_builder("entry_point")
-        .arg(&buffer)
-        .arg(&ctx_buffer)
-        .arg(&patterns_buffer)
-        .arg(&chunk_buffer)
-        .build()?;
-
-    let data = [0, 1, 2];
-
-    buffer.write(&data[..]).enq()?;
-
-    // Loading context
-    println!("Transferring the secp256k1 context...");
-
-    let tmp = [ctx_arg];
-    ctx_buffer.write(&tmp[..]).enq()?;
-
-    for chunk_index in 0..ECMULT_TABLE_CHUNKS {
-        chunk_buffer.write(&chunks[chunk_index..(chunk_index + 1)]).enq()?;
-        unsafe { kernel.enq()?; }
-    }
-
-    // Loading dictionary
-    println!("Transferring the pattern dictionary...");
-
     let allowed_characters = "0123456789abcdef";
-    let patterns = vec!["c0ffee", "c0c0a", "abcd", "deadbeef", "invalid"];
+    let patterns = vec!["coffee", "cocoa", "abcd", "deadbeef"];
     let mut patterns_by_length: [Vec<String>; ADDRESS_LENGTH] = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 
     'pattern_loop:
@@ -141,9 +69,141 @@ fn main() -> ocl::Result<()> {
         patterns_by_length[pattern.len() - 1].push(pattern.to_string());
     }
 
-    for (pattern_length, patterns) in (&mut patterns_by_length[..]).into_iter().enumerate().map(|(i, patterns)| (i + 1, patterns)) {
+    for patterns in &mut patterns_by_length[..] {
         patterns.sort();
+    }
 
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.blind.d[0]", ctx_arg.ecmult_gen_ctx.blind.d[0]);
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.infinity", ctx_arg.ecmult_gen_ctx.initial.infinity);
+    // debug!("host", "ctx_arg.ecmult_gen_ctx.initial.x.n[0]", ctx_arg.ecmult_gen_ctx.initial.x.n[0]);
+
+    let context = Context::builder().build().unwrap();
+
+    let devices = match context.info(ContextInfo::Devices).expect("Could not access OpenCL devices.") {
+        ContextInfoResult::Devices(devices) => devices,
+        _ => panic!("Unexpected OpenCL devices query result."),
+    };
+
+    println!("devices: {:?}", devices);
+
+    let chunks = Arc::new(chunks);
+
+    for (device_index, device_id) in devices.iter().enumerate() {
+        exec_device(ctx_arg, chunks.clone(), context.clone(), device_index, *device_id, &patterns_by_length);
+    }
+
+    Ok(())
+}
+
+macro_rules! device_info {
+    ($context:expr, $device_index:expr, $($device_info:tt)+) => {
+        match $context.device_info($device_index, DeviceInfo::$($device_info)+).unwrap() {
+            DeviceInfoResult::$($device_info)+(inner) => inner,
+            _ => panic!("Invalid device info result while requesting `{}`.", stringify!($($device_info)+)),
+        }
+    }
+}
+
+fn slice_to_spatial_dims(slice: &[usize]) -> SpatialDims {
+    match slice.len() {
+        1 => SpatialDims::One(slice[0]),
+        2 => SpatialDims::Two(slice[0], slice[1]),
+        3 => SpatialDims::Three(slice[0], slice[1], slice[2]),
+        _ => SpatialDims::Unspecified,
+    }
+}
+
+fn exec_device(
+    ctx_arg: secp256k1_context_struct_arg,
+    chunks: Arc<Box<[secp256k1_ecmult_context_chunk; ECMULT_TABLE_CHUNKS]>>,
+    context: Context,
+    device_index: usize,
+    device_id: DeviceId,
+    patterns_by_length: &[Vec<String>; ADDRESS_LENGTH],
+) -> ocl::Result<()>{
+    println!("MaxComputeUnits: {:?}", context.device_info(device_index, DeviceInfo::MaxComputeUnits).unwrap());
+    println!("MaxWorkItemDimensions: {:?}", context.device_info(device_index, DeviceInfo::MaxWorkItemDimensions).unwrap());
+    println!("MaxWorkGroupSize: {:?}", context.device_info(device_index, DeviceInfo::MaxWorkGroupSize).unwrap());
+    println!("MaxWorkItemSizes: {:?}", context.device_info(device_index, DeviceInfo::MaxWorkItemSizes).unwrap());
+
+    let max_compute_units = device_info!(context, device_index, MaxComputeUnits);
+    let max_work_item_dimensions = device_info!(context, device_index, MaxWorkItemDimensions);
+    let max_work_group_size = device_info!(context, device_index, MaxWorkGroupSize);
+    let max_work_item_sizes = device_info!(context, device_index, MaxWorkItemSizes);
+
+    let work_group_size = [max_work_group_size, 1, 1];
+
+    let mut program_builder = ProgramBuilder::new();
+
+    // nVidia has source caching, but it isn't reliable when using #include
+    #[cfg(debug_assertions)]
+    std::env::set_var("CUDA_CACHE_DISABLE", "1");
+    program_builder.cmplr_opt("-cl-std=CL2.0");
+    program_builder.cmplr_def("WORK_GROUP_SIZE_X", work_group_size[0] as i32);
+    program_builder.cmplr_def("WORK_GROUP_SIZE_Y", work_group_size[1] as i32);
+    program_builder.cmplr_def("WORK_GROUP_SIZE_Z", work_group_size[2] as i32);
+    #[cfg(debug_assertions)]
+    program_builder.cmplr_def("DEBUG_ASSERTIONS", 1);
+
+    for (pattern_length, patterns) in (&patterns_by_length[..]).into_iter().enumerate().map(|(i, patterns)| (i + 1, patterns)) {
+        program_builder.cmplr_def(format!("PATTERNS_OF_LENGTH_{:02}", pattern_length), patterns.len() as i32);
+    }
+
+    program_builder.src(include_str!("shader/kernel.cl"));
+
+    // TODO: Friendlier output
+    println!("Compiling shader for device `{:?}`, this may take a while...", device_index);
+
+    let pro_que: ProQue = ProQue::builder()
+        .context(context.clone())
+        .device(device_id)
+        .prog_bldr(program_builder)
+        // .dims(max_work_item_dimensions)
+        .dims((max_work_group_size * max_compute_units as usize, 1, 1))
+        .build()?;
+    // let buffer = pro_que.create_buffer::<u32>()?;
+    let ctx_buffer = pro_que.buffer_builder::<secp256k1_context_struct_arg>()
+        .flags(MemFlags::READ_ONLY)
+        .len(1)
+        .build()?;
+    let patterns_buffer = pro_que.buffer_builder::<patterns_chunk>()
+        .flags(MemFlags::READ_ONLY)
+        .len(1)
+        .build()?;
+    let chunk_buffer = pro_que.buffer_builder::<secp256k1_ecmult_context_chunk>()
+        .flags(MemFlags::READ_ONLY)
+        .len(1)
+        .build()?;
+    let kernel = pro_que.kernel_builder("entry_point")
+        // Must be divisible by `local_work_size`:
+        .global_work_size((max_work_group_size * max_compute_units as usize, 1, 1))
+        // should conform to MaxWorkItemSizes limits
+        .local_work_size(work_group_size)
+        // .arg(&buffer)
+        .arg(&ctx_buffer)
+        .arg(&patterns_buffer)
+        .arg(&chunk_buffer)
+        .build()?;
+
+    let data = [0, 1, 2];
+
+    // buffer.write(&data[..]).enq()?;
+
+    // Loading context
+    println!("Transferring the secp256k1 context...");
+
+    let tmp = [ctx_arg];
+    ctx_buffer.write(&tmp[..]).enq()?;
+
+    for chunk_index in 0..ECMULT_TABLE_CHUNKS {
+        chunk_buffer.write(&chunks[chunk_index..(chunk_index + 1)]).enq()?;
+        unsafe { kernel.enq()?; }
+    }
+
+    // Loading dictionary
+    println!("Transferring the pattern dictionary...");
+
+    for (pattern_length, patterns) in (&patterns_by_length[..]).into_iter().enumerate().map(|(i, patterns)| (i + 1, patterns)) {
         let patterns_per_chunk = PATTERN_CHUNK_BYTES / pattern_length;
 
         for (chunk, patterns_in_chunk) in patterns.chunks(patterns_per_chunk).enumerate() {
@@ -168,7 +228,7 @@ fn main() -> ocl::Result<()> {
     }
 
     // Signalize state change
-    let mut chunk = [patterns_chunk::default()];
+    let chunk = [patterns_chunk::default()];
 
     patterns_buffer.write(&chunk[..]).enq()?;
     unsafe { kernel.enq()?; }
@@ -176,15 +236,15 @@ fn main() -> ocl::Result<()> {
     // Running
     println!("Launching computation.");
 
-    let mut vec = vec![0; buffer.len()];
+    // let mut vec = vec![0; buffer.len()];
 
-    buffer.read(&mut vec).enq()?;
-    println!("{:?}", vec);
+    // buffer.read(&mut vec).enq()?;
+    // println!("{:?}", vec);
 
     unsafe { kernel.enq()?; }
 
-    buffer.read(&mut vec).enq()?;
-    println!("{:?}", vec);
+    // buffer.read(&mut vec).enq()?;
+    // println!("{:?}", vec);
 
     Ok(())
 }
