@@ -17,6 +17,7 @@
 #include "src/shader/secp256k1.cl"
 #include "src/shader/keccak.cl"
 #include "src/shader/atomic.cl"
+/* #include "src/shader/mrg32k3a.cl" */
 
 #define SECRET_KEY_BYTES 32
 #define ADDRESS_LENGTH 40
@@ -24,6 +25,7 @@
 #define KECCAK_OUTPUT_BYTES 32
 #define ADDRESS_BYTE_INDEX (KECCAK_OUTPUT_BYTES - ADDRESS_BYTES)
 #define PATTERN_CHUNK_BYTES 1000
+#define WORK_GROUP_SIZE (WORK_GROUP_SIZE_X * WORK_GROUP_SIZE_Y * WORK_GROUP_SIZE_Z)
 
 #ifdef DEBUG_ASSERTIONS
 # define DEBUG(fmt, arg) printf("[DEVICE DEBUG] " fmt, arg)
@@ -36,6 +38,7 @@ void run_eckey_edge_case_test(secp256k1_context *ctx);
 enum state {
     STATE_LOADING_CONTEXT,
     STATE_LOADING_DICTIONARY,
+    STATE_LOADING_SECRET_KEYS,
     STATE_RUNNING,
 };
 
@@ -89,6 +92,7 @@ typedef struct {
     char patterns_of_length_39[PATTERNS_OF_LENGTH_39][39];
     char patterns_of_length_40[PATTERNS_OF_LENGTH_40][40];
     char *patterns_of_length[40];
+    size_t patterns_of_length_lengths[40];
 } pattern_dictionary;
 
 typedef struct {
@@ -107,6 +111,7 @@ typedef struct {
     secp256k1_context_arg *ctx_arg;
     patterns_chunk *patterns_chunk_buffer;
     secp256k1_ecmult_context_chunk *chunk;
+    secret_key_t *seckey;
 } arguments;
 
 static global bool state = STATE_LOADING_CONTEXT;
@@ -117,6 +122,8 @@ static global secp256k1_ge_storage pre_g_128[ECMULT_TABLE_SIZE(WINDOW_G)];
 #endif
 static global secp256k1_context context;
 static global pattern_dictionary dictionary;
+static global secret_key_t current_secret_keys[GLOBAL_WORK_SIZE];
+/* static global mrg32k3a_context rngs[GLOBAL_WORK_SIZE]; */
 
 // only literal strings may be passed to printf
 #ifdef DEBUG_ASSERTIONS
@@ -230,6 +237,22 @@ void print_address(address_t *address, bool includeHexPrefix) {
     }
 }
 
+void secret_key_increment(secret_key_t *seckey) {
+    for (size_t i = 0; i < SECRET_KEY_BYTES; i++) {
+        size_t byte_index = SECRET_KEY_BYTES - 1 - i;
+        uchar *byte = &seckey->array[byte_index];
+
+        if (*byte == 0xFF) {
+            *byte = 0x00;
+        } else {
+            (*byte)++;
+            break;
+        }
+    }
+
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+}
+
 void initialize_context(arguments *args) {
     context = (secp256k1_context) {
         .ecmult_ctx = (secp256k1_ecmult_context) {
@@ -293,7 +316,7 @@ void branch_loading_context_atomic(arguments *args) {
 }
 
 void branch_loading_context(arguments *args) {
-    size_t i = get_global_id(0);
+    size_t i = get_global_linear_id();
 
     if (i == 0) {
         branch_loading_context_atomic(args);
@@ -345,6 +368,46 @@ void initialize_dictionary() {
     dictionary.patterns_of_length[37] = (char *__global) dictionary.patterns_of_length_38;
     dictionary.patterns_of_length[38] = (char *__global) dictionary.patterns_of_length_39;
     dictionary.patterns_of_length[39] = (char *__global) dictionary.patterns_of_length_40;
+    dictionary.patterns_of_length_lengths[ 0] = PATTERNS_OF_LENGTH_01;
+    dictionary.patterns_of_length_lengths[ 1] = PATTERNS_OF_LENGTH_02;
+    dictionary.patterns_of_length_lengths[ 2] = PATTERNS_OF_LENGTH_03;
+    dictionary.patterns_of_length_lengths[ 3] = PATTERNS_OF_LENGTH_04;
+    dictionary.patterns_of_length_lengths[ 4] = PATTERNS_OF_LENGTH_05;
+    dictionary.patterns_of_length_lengths[ 5] = PATTERNS_OF_LENGTH_06;
+    dictionary.patterns_of_length_lengths[ 6] = PATTERNS_OF_LENGTH_07;
+    dictionary.patterns_of_length_lengths[ 7] = PATTERNS_OF_LENGTH_08;
+    dictionary.patterns_of_length_lengths[ 8] = PATTERNS_OF_LENGTH_09;
+    dictionary.patterns_of_length_lengths[ 9] = PATTERNS_OF_LENGTH_10;
+    dictionary.patterns_of_length_lengths[10] = PATTERNS_OF_LENGTH_11;
+    dictionary.patterns_of_length_lengths[11] = PATTERNS_OF_LENGTH_12;
+    dictionary.patterns_of_length_lengths[12] = PATTERNS_OF_LENGTH_13;
+    dictionary.patterns_of_length_lengths[13] = PATTERNS_OF_LENGTH_14;
+    dictionary.patterns_of_length_lengths[14] = PATTERNS_OF_LENGTH_15;
+    dictionary.patterns_of_length_lengths[15] = PATTERNS_OF_LENGTH_16;
+    dictionary.patterns_of_length_lengths[16] = PATTERNS_OF_LENGTH_17;
+    dictionary.patterns_of_length_lengths[17] = PATTERNS_OF_LENGTH_18;
+    dictionary.patterns_of_length_lengths[18] = PATTERNS_OF_LENGTH_19;
+    dictionary.patterns_of_length_lengths[19] = PATTERNS_OF_LENGTH_20;
+    dictionary.patterns_of_length_lengths[20] = PATTERNS_OF_LENGTH_21;
+    dictionary.patterns_of_length_lengths[21] = PATTERNS_OF_LENGTH_22;
+    dictionary.patterns_of_length_lengths[22] = PATTERNS_OF_LENGTH_23;
+    dictionary.patterns_of_length_lengths[23] = PATTERNS_OF_LENGTH_24;
+    dictionary.patterns_of_length_lengths[24] = PATTERNS_OF_LENGTH_25;
+    dictionary.patterns_of_length_lengths[25] = PATTERNS_OF_LENGTH_26;
+    dictionary.patterns_of_length_lengths[26] = PATTERNS_OF_LENGTH_27;
+    dictionary.patterns_of_length_lengths[27] = PATTERNS_OF_LENGTH_28;
+    dictionary.patterns_of_length_lengths[28] = PATTERNS_OF_LENGTH_29;
+    dictionary.patterns_of_length_lengths[29] = PATTERNS_OF_LENGTH_30;
+    dictionary.patterns_of_length_lengths[30] = PATTERNS_OF_LENGTH_31;
+    dictionary.patterns_of_length_lengths[31] = PATTERNS_OF_LENGTH_32;
+    dictionary.patterns_of_length_lengths[32] = PATTERNS_OF_LENGTH_33;
+    dictionary.patterns_of_length_lengths[33] = PATTERNS_OF_LENGTH_34;
+    dictionary.patterns_of_length_lengths[34] = PATTERNS_OF_LENGTH_35;
+    dictionary.patterns_of_length_lengths[35] = PATTERNS_OF_LENGTH_36;
+    dictionary.patterns_of_length_lengths[36] = PATTERNS_OF_LENGTH_37;
+    dictionary.patterns_of_length_lengths[37] = PATTERNS_OF_LENGTH_38;
+    dictionary.patterns_of_length_lengths[38] = PATTERNS_OF_LENGTH_39;
+    dictionary.patterns_of_length_lengths[39] = PATTERNS_OF_LENGTH_40;
 }
 
 bool dictionary_loading_finished(arguments *args) {
@@ -361,7 +424,7 @@ void branch_loading_dictionary_atomic(arguments *args) {
     loading_index++;
 
     if (dictionary_loading_finished(args)) {
-        state = STATE_RUNNING;
+        state = STATE_LOADING_SECRET_KEYS;
         loading_index = 0;
         return;
     }
@@ -385,10 +448,34 @@ void branch_loading_dictionary_atomic(arguments *args) {
 }
 
 void branch_loading_dictionary(arguments *args) {
-    size_t i = get_global_id(0);
+    size_t i = get_global_linear_id();
 
     if (i == 0) {
         branch_loading_dictionary_atomic(args);
+    }
+
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+}
+
+void branch_loading_secret_keys_atomic(arguments *args) {
+    current_secret_keys[loading_index] = args->seckey[0];
+
+    /* printf("seckey #%u loaded, first byte: %u\n", loading_index, current_secret_keys[loading_index].array[0]); */
+
+    if (loading_index >= GLOBAL_WORK_SIZE - 1) {
+        state = STATE_RUNNING;
+        loading_index = 0;
+        return;
+    }
+
+    loading_index++;
+}
+
+void branch_loading_secret_keys(arguments *args) {
+    size_t i = get_global_linear_id();
+
+    if (i == 0) {
+        branch_loading_secret_keys_atomic(args);
     }
 
     work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
@@ -663,41 +750,103 @@ address_t derive_address(secret_key_t *seckey) {
     return address;
 }
 
-void branch_running(arguments *args) {
-    size_t i = get_global_id(0);
-
-    printf("%i\n", i);
-
-    if (i != 2) {
-        return;
+bool binary_search(void *item, void *array, size_t item_bytes, size_t array_len) {
+    if (array_len == 0) {
+        return false;
     }
+
+    size_t middle_index = array_len / 2;
+    void *middle_item = array + middle_index * item_bytes;
+    int cmp = memcmp(item, middle_item, item_bytes);
+
+    /* printf("cmp: %d\n", cmp); */
+
+    size_t sub_array_len;
+    size_t sub_array_offset;
+
+    if (cmp == 0) {
+        return true;
+    } else if (cmp < 0) {
+        sub_array_len = middle_index;
+        sub_array_offset = 0;
+    } else { // cmp > 0
+        sub_array_len = array_len - middle_index - 1;
+        sub_array_offset = middle_index + 1;
+    }
+
+    void *sub_array = array + sub_array_offset * item_bytes;
+
+    return binary_search(item, sub_array, item_bytes, sub_array_len);
+}
+
+bool is_address_desirable(address_t *address) {
+    char address_string[ADDRESS_LENGTH];
+    bool match_found = false;
+
+    serialize_address(&address_string, address, false);
+
+    for (size_t pattern_len = 1; pattern_len <= ADDRESS_LENGTH; pattern_len++) {
+        char *patterns = dictionary.patterns_of_length[pattern_len - 1];
+        size_t patterns_len = dictionary.patterns_of_length_lengths[pattern_len - 1];
+        match_found = binary_search(&address_string, patterns, pattern_len, patterns_len);
+
+        /* printf("address: "); */
+        /* print_address_bytes(&address_string, false); */
+        /* printf("\tpattern_len: %li\tpatterns_len: %li\tpatterns[0]: ", pattern_len, patterns_len); */
+        /* print_address_bytes_len(&patterns[0], pattern_len); */
+        /* printf("\tmatch_found: %u\n", match_found); */
+
+        if (match_found) {
+            break;
+        }
+    }
+
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+
+    return match_found;
+}
+
+void branch_running(arguments *args) {
+    size_t i = get_global_linear_id();
+
+    /* if (i != 0) { */
+    /*     return; */
+    /* } */
 
     // might need to be 33 bytes for some reason
-    secret_key_t seckey = (secret_key_t) {
-        .array = { 0 },
-    };
+    secret_key_t *seckey = &current_secret_keys[i];
 
-    seckey.array[31] = i;
-
-    if (!is_secret_key_valid(&seckey)) {
-        printf("Core %i result: invalid private key\n", i);
+    if (!is_secret_key_valid(seckey)) {
+        printf("Work item %i result:\tinvalid private key\n", i);
         return;
     }
 
-    address_t address = derive_address(&seckey);
+    address_t address = derive_address(seckey);
 
-    printf("Core %i result: ", i);
-    print_address(&address, true);
-    printf("\n");
+    if (is_address_desirable(&address)) {
+        printf("Work item %i result:\t", i);
+        print_address(&address, true);
+        printf("\n");
+    }
+
+    secret_key_increment(seckey);
 }
 
 __attribute__((reqd_work_group_size(WORK_GROUP_SIZE_X, WORK_GROUP_SIZE_Y, WORK_GROUP_SIZE_Z)))
-kernel void entry_point(/*global uint *input, */global secp256k1_context_arg *ctx_arg, global patterns_chunk *patterns_chunk_buffer, global secp256k1_ecmult_context_chunk *chunk) {
+kernel void entry_point(
+    /*global uint *input, */
+    global secp256k1_context_arg *ctx_arg,
+    global patterns_chunk *patterns_chunk_buffer,
+    global secp256k1_ecmult_context_chunk *chunk,
+    global secret_key_t *seckey
+    /* global mrg32k3a_context *mrg32k3a_ctx */
+) {
     arguments args = (arguments) {
         /* .input = input, */
         .ctx_arg = ctx_arg,
         .patterns_chunk_buffer = patterns_chunk_buffer,
         .chunk = chunk,
+        .seckey = seckey,
     };
 
     switch (state) {
@@ -707,16 +856,34 @@ kernel void entry_point(/*global uint *input, */global secp256k1_context_arg *ct
         case STATE_LOADING_DICTIONARY:
             branch_loading_dictionary(&args);
             break;
+        case STATE_LOADING_SECRET_KEYS:
+            branch_loading_secret_keys(&args);
+            break;
         case STATE_RUNNING:
             branch_running(&args);
             break;
     }
 
-    printf("global_id: %lu\tlocal_id: %lu\n", get_global_id(0), get_local_id(0));
+    /* size_t lli = get_local_linear_id(); */
+    /* local int loc[WORK_GROUP_SIZE]; */
+    /* private int priv[WORK_GROUP_SIZE]; */
 
-    if (get_global_id(0) == 0) {
-        printf("global_size: %lu\tlocal_size: %lu\n", get_global_size(0), get_local_size(0));
-    }
+    /* if (loading_index == 1 && state == STATE_LOADING_CONTEXT) { */
+    /*     loc[lli] = 0; */
+    /*     priv[lli] = 0; */
+    /*     printf("incrementing %li\n", lli); */
+    /* } else { */
+    /*     loc[lli]++; */
+    /*     priv[lli]++; */
+    /*     printf("incrementing %li\n", lli); */
+    /* } */
+
+    /* printf("global_id: %lu\tlocal_id: %lu\tloc: %i\tpriv: %i\n", get_global_id(0), get_local_id(0), loc[lli], priv[lli]); */
+    /* printf("global_id: %lu\tlocal_id: %lu\n", get_global_id(0), get_local_id(0)); */
+
+    /* if (get_global_id(0) == 0) { */
+    /*     printf("global_size: %lu\tlocal_size: %lu\n", get_global_size(0), get_local_size(0)); */
+    /* } */
 
     /* input[get_global_id(0)]++; */
 }

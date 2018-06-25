@@ -6,3 +6,4 @@ authors = ["Jakub Hlusička <limeth@protonmail.com>"]
 [dependencies]
 ocl = { version = "0.18", features = ["opencl_version_2_1"] }
 secp256k1 = "0.9.0"
+rand = "0.5.2"

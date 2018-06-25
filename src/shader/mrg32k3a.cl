@@ -23,11 +23,11 @@ typedef struct {
     ulong s2[3];
 } mrg32k3a_context;
 
-/***
-The seeds for s1[0], s1[1], s1[2] must be integers in <0; m1 - 1> and not all 0.
-The seeds for s2[0], s2[1], s2[2] must be integers in <0; m2 - 1> and not all 0.
-***/
-bool mrg32k3a_context_create(ulong[MRG32K3A_SEEDS_LEN] seeds, mrg32k3a_context *uninitialized) {
+/*
+ * The seeds for s1[0], s1[1], s1[2] must be integers in <0; m1 - 1> and not all 0.
+ * The seeds for s2[0], s2[1], s2[2] must be integers in <0; m2 - 1> and not all 0.
+ */
+bool mrg32k3a_context_create(ulong seeds[MRG32K3A_SEEDS_LEN], mrg32k3a_context *uninitialized) {
     for (int i = 0; i < 3; i++) {
         if (seeds[i] > m1 - 1) {
             return false;
@@ -66,7 +66,7 @@ bool mrg32k3a_context_create_work_item(constant uchar *seed_buffer, mrg32k3a_con
     size_t id = get_global_linear_id();
     size_t offset = id * MRG32K3A_SEEDS_BYTES;
     ulong *seeds_pointer = (ulong*) (seed_buffer + offset);
-    ulong[MRG32K3A_SEEDS_LEN] seeds = { 0 };
+    ulong seeds[MRG32K3A_SEEDS_LEN] = { 0 };
 
     for (size_t i = 0; i < MRG32K3A_SEEDS_LEN; i++) {
         seeds[i] = seeds_pointer[i];

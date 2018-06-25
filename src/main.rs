@@ -1,5 +1,6 @@
 extern crate ocl;
 extern crate secp256k1;
+extern crate rand;
 
 #[macro_use]
 mod context;
@@ -16,6 +17,8 @@ use ocl::ProQue;
 use ocl::builders::ProgramBuilder;
 use ocl::flags::MemFlags;
 use ocl::traits::OclPrm;
+use rand::Rng;
+use rand::OsRng;
 use std::fmt;
 use std::sync::Arc;
 use std::thread;
@@ -23,7 +26,49 @@ use std::time::Duration;
 
 const ADDRESS_LENGTH: usize = 40;
 const PATTERN_CHUNK_BYTES: usize = 1000;
+const MRG32K3A_SEEDS_LEN: usize = 6;
+const SECRET_KEY_BYTES: usize = 32;
+const M1: u64 = 4294967087;
+const M2: u64 = 4294944443;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct secret_key_bytes_array_alias([u8; SECRET_KEY_BYTES]);
+
+impl_array!(secret_key_bytes_array_alias([u8; SECRET_KEY_BYTES]));
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct secret_key_t {
+    array: secret_key_bytes_array_alias,
+}
+
+unsafe impl OclPrm for secret_key_t {}
+
+impl secret_key_t {
+    fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
+        secret_key_t {
+            array: secret_key_bytes_array_alias(rng.gen())
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct s_alias([u64; 3]);
+
+impl_array!(s_alias([u64; 3]));
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct mrg32k3a_context {
+    s1: s_alias,
+    s2: s_alias,
+}
+
+unsafe impl OclPrm for mrg32k3a_context {}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 struct patterns_alias([u8; PATTERN_CHUNK_BYTES]);
 
@@ -40,12 +85,58 @@ struct patterns_chunk {
 
 unsafe impl OclPrm for patterns_chunk {}
 
+impl mrg32k3a_context {
+    /*
+     * The seeds for s1[0], s1[1], s1[2] must be integers in <0; m1 - 1> and not all 0.
+     * The seeds for s2[0], s2[1], s2[2] must be integers in <0; m2 - 1> and not all 0.
+     */
+    fn from(seeds: &[u64; MRG32K3A_SEEDS_LEN]) -> Result<Self, ()> {
+        for i in 0..3 {
+            if seeds[i] > M1 - 1 {
+                return Err(());
+            }
+        }
+
+        for i in 3..6 {
+            if seeds[i] > M2 - 1 {
+                return Err(());
+            }
+        }
+
+        let mut zero = 0;
+
+        for item in seeds {
+            zero |= item;
+        }
+
+        if zero == 0 {
+            return Err(());
+        }
+
+        Ok(mrg32k3a_context {
+            s1: s_alias([seeds[0], seeds[1], seeds[2]]),
+            s2: s_alias([seeds[3], seeds[4], seeds[5]]),
+        })
+    }
+
+    fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
+        loop {
+            let seeds = rng.gen();
+            let result = Self::from(&seeds);
+
+            if let Ok(ctx) = result {
+                return ctx;
+            }
+        }
+    }
+}
+
 fn main() -> ocl::Result<()> {
     let mut secp256k1 = Secp256k1Context::new();
     let (ctx_arg, chunks) = secp256k1.copied_without_pointers();
 
     let allowed_characters = "0123456789abcdef";
-    let patterns = vec!["coffee", "cocoa", "abcd", "deadbeef"];
+    let patterns = vec!["c0ffee", "c0c0a", "deadbeef"];
     let mut patterns_by_length: [Vec<String>; ADDRESS_LENGTH] = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 
     'pattern_loop:
@@ -132,6 +223,8 @@ fn exec_device(
     let max_work_item_sizes = device_info!(context, device_index, MaxWorkItemSizes);
 
     let work_group_size = [max_work_group_size, 1, 1];
+    let global_work_size = [max_work_group_size * max_compute_units as usize, 1, 1];
+    let global_work_size_linear = (global_work_size[0] * global_work_size[1] * global_work_size[2]);
 
     let mut program_builder = ProgramBuilder::new();
 
@@ -142,6 +235,7 @@ fn exec_device(
     program_builder.cmplr_def("WORK_GROUP_SIZE_X", work_group_size[0] as i32);
     program_builder.cmplr_def("WORK_GROUP_SIZE_Y", work_group_size[1] as i32);
     program_builder.cmplr_def("WORK_GROUP_SIZE_Z", work_group_size[2] as i32);
+    program_builder.cmplr_def("GLOBAL_WORK_SIZE", global_work_size_linear as i32);
     #[cfg(debug_assertions)]
     program_builder.cmplr_def("DEBUG_ASSERTIONS", 1);
 
@@ -162,7 +256,7 @@ fn exec_device(
         .dims((max_work_group_size * max_compute_units as usize, 1, 1))
         .build()?;
     // let buffer = pro_que.create_buffer::<u32>()?;
-    let ctx_buffer = pro_que.buffer_builder::<secp256k1_context_struct_arg>()
+    let secp256k1_buffer = pro_que.buffer_builder::<secp256k1_context_struct_arg>()
         .flags(MemFlags::READ_ONLY)
         .len(1)
         .build()?;
@@ -174,33 +268,44 @@ fn exec_device(
         .flags(MemFlags::READ_ONLY)
         .len(1)
         .build()?;
+    let seckey_buffer = pro_que.buffer_builder::<secret_key_t>()
+        .flags(MemFlags::READ_ONLY)
+        .len(1)
+        .build()?;
+    // let mrg32k3a_buffer = pro_que.buffer_builder::<mrg32k3a_context>()
+    //     .flags(MemFlags::READ_ONLY)
+    //     .len(1)
+    //     .build()?;
     let kernel = pro_que.kernel_builder("entry_point")
         // Must be divisible by `local_work_size`:
-        .global_work_size((max_work_group_size * max_compute_units as usize, 1, 1))
+        .global_work_size(global_work_size)
         // should conform to MaxWorkItemSizes limits
         .local_work_size(work_group_size)
         // .arg(&buffer)
-        .arg(&ctx_buffer)
+        .arg(&secp256k1_buffer)
         .arg(&patterns_buffer)
         .arg(&chunk_buffer)
+        .arg(&seckey_buffer)
+        // .arg(&mrg32k3a_buffer)
         .build()?;
 
     let data = [0, 1, 2];
 
     // buffer.write(&data[..]).enq()?;
 
-    // Loading context
+    // {{{ Loading context
     println!("Transferring the secp256k1 context...");
 
     let tmp = [ctx_arg];
-    ctx_buffer.write(&tmp[..]).enq()?;
+    secp256k1_buffer.write(&tmp[..]).enq()?;
 
     for chunk_index in 0..ECMULT_TABLE_CHUNKS {
         chunk_buffer.write(&chunks[chunk_index..(chunk_index + 1)]).enq()?;
         unsafe { kernel.enq()?; }
     }
+    // }}}
 
-    // Loading dictionary
+    // {{{ Loading dictionary
     println!("Transferring the pattern dictionary...");
 
     for (pattern_length, patterns) in (&patterns_by_length[..]).into_iter().enumerate().map(|(i, patterns)| (i + 1, patterns)) {
@@ -232,8 +337,32 @@ fn exec_device(
 
     patterns_buffer.write(&chunk[..]).enq()?;
     unsafe { kernel.enq()?; }
+    // }}}
 
-    // Running
+    // {{{ Loading initial secret keys
+    println!("Generating and transferring initial secret keys...");
+
+    let mut rng = OsRng::new().expect("Could not create an OS RNG.");
+
+    for work_item in 0..global_work_size_linear {
+        let seckey_array = [secret_key_t::random(&mut rng)];
+        seckey_buffer.write(&seckey_array[..]).enq()?;
+        unsafe { kernel.enq()?; }
+    }
+    // }}}
+
+    // {{{ Setting up the device-local pseudo RNG
+    // let mut rng = OsRng::new().expect("Could not create an OS RNG.");
+
+    // for work_item in 0..global_work_size_linear {
+    //     let mrg32k3a_context_array = [mrg32k3a_context::random(&mut rng)];
+    //     mrg32k3a_buffer.write(&mrg32k3a_context_array[..]).enq()?;
+    //     unsafe { kernel.enq()?; }
+    // }
+    // }}}
+
+    // {{{ Running
+
     println!("Launching computation.");
 
     // let mut vec = vec![0; buffer.len()];
@@ -241,10 +370,13 @@ fn exec_device(
     // buffer.read(&mut vec).enq()?;
     // println!("{:?}", vec);
 
-    unsafe { kernel.enq()?; }
+    for _ in 0..3000 {
+        unsafe { kernel.enq()?; }
+    }
 
     // buffer.read(&mut vec).enq()?;
     // println!("{:?}", vec);
+    // }}}
 
     Ok(())
 }
