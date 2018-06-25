@@ -826,6 +826,10 @@ void branch_running(arguments *args) {
     if (is_address_desirable(&address)) {
         printf("Work item %i result:\t", i);
         print_address(&address, true);
+        printf("\tsecret key: ");
+        char seckey_string[SECRET_KEY_BYTES * 2];
+        to_hex_string(&seckey->array, SECRET_KEY_BYTES, &seckey_string);
+        print_address_bytes_len(&seckey_string, SECRET_KEY_BYTES * 2);
         printf("\n");
     }
 
