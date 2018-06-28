@@ -14,3 +14,6 @@ void end_sequential_execution(atomic_flag *flag) {
     atomic_flag_clear_explicit(flag, memory_order_seq_cst, memory_scope_device);
     work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
 }
+
+/* uint atomic_increment(volatile atomic_uint *target) { */
+/* } */

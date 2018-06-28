@@ -19,6 +19,7 @@
 #include "src/shader/atomic.cl"
 /* #include "src/shader/mrg32k3a.cl" */
 
+#define MAX_CYCLES_PER_KERNEL_EXECUTION 32
 #define SECRET_KEY_BYTES 32
 #define ADDRESS_LENGTH 40
 #define ADDRESS_BYTES (ADDRESS_LENGTH / 2)
@@ -49,6 +50,11 @@ typedef struct {
 typedef struct {
     uchar array[ADDRESS_BYTES];
 } address_t;
+
+typedef struct {
+    secret_key_t seckey;
+    address_t address;
+} result_t;
 
 typedef struct {
     char patterns_of_length_01[PATTERNS_OF_LENGTH_01][ 1];
@@ -112,17 +118,21 @@ typedef struct {
     patterns_chunk *patterns_chunk_buffer;
     secp256k1_ecmult_context_chunk *chunk;
     secret_key_t *seckey;
+    uint *cycles;
+    uint *result_queue_length;
+    result_t *result_queue;
 } arguments;
 
-static global bool state = STATE_LOADING_CONTEXT;
-static global uint loading_index = 0;
-static global secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
+global static volatile atomic_uint result_queue_length_atomic = ATOMIC_VAR_INIT(0);
+global static bool state = STATE_LOADING_CONTEXT;
+global static uint loading_index = 0;
+global static secp256k1_ge_storage pre_g[ECMULT_TABLE_SIZE(WINDOW_G)];
 #ifdef USE_ENDOMORPHISM
-static global secp256k1_ge_storage pre_g_128[ECMULT_TABLE_SIZE(WINDOW_G)];
+global static secp256k1_ge_storage pre_g_128[ECMULT_TABLE_SIZE(WINDOW_G)];
 #endif
-static global secp256k1_context context;
-static global pattern_dictionary dictionary;
-static global secret_key_t current_secret_keys[GLOBAL_WORK_SIZE];
+global static secp256k1_context context;
+global static pattern_dictionary dictionary;
+global static secret_key_t current_secret_keys[GLOBAL_WORK_SIZE];
 /* static global mrg32k3a_context rngs[GLOBAL_WORK_SIZE]; */
 
 // only literal strings may be passed to printf
@@ -806,34 +816,66 @@ bool is_address_desirable(address_t *address) {
     return match_found;
 }
 
-void branch_running(arguments *args) {
+bool attempt_next_match(result_t *result) {
     size_t i = get_global_linear_id();
-
-    /* if (i != 0) { */
-    /*     return; */
-    /* } */
+    bool match_found = false;
 
     // might need to be 33 bytes for some reason
     secret_key_t *seckey = &current_secret_keys[i];
 
-    if (!is_secret_key_valid(seckey)) {
-        printf("Work item %i result:\tinvalid private key\n", i);
-        return;
-    }
+    if (is_secret_key_valid(seckey)) {
+        address_t address = derive_address(seckey);
 
-    address_t address = derive_address(seckey);
-
-    if (is_address_desirable(&address)) {
-        printf("Work item %i result:\t", i);
-        print_address(&address, true);
-        printf("\tsecret key: ");
-        char seckey_string[SECRET_KEY_BYTES * 2];
-        to_hex_string(&seckey->array, SECRET_KEY_BYTES, &seckey_string);
-        print_address_bytes_len(&seckey_string, SECRET_KEY_BYTES * 2);
-        printf("\n");
+        if (is_address_desirable(&address)) {
+            match_found = true;
+            *result = (result_t) {
+                .seckey = *seckey,
+                .address = address,
+            };
+            /* printf("Work item %i result:\t", i); */
+            /* print_address(&address, true); */
+            /* printf("\tsecret key: "); */
+            /* char seckey_string[SECRET_KEY_BYTES * 2]; */
+            /* to_hex_string(&seckey->array, SECRET_KEY_BYTES, &seckey_string); */
+            /* print_address_bytes_len(&seckey_string, SECRET_KEY_BYTES * 2); */
+            /* printf("\n"); */
+        }
     }
 
     secret_key_increment(seckey);
+
+    return match_found;
+}
+
+void branch_running(arguments *args) {
+    atomic_store(&result_queue_length_atomic, 0);
+    args->result_queue_length[0] = 0;
+    uint i;
+
+    for (i = 0; i < MAX_CYCLES_PER_KERNEL_EXECUTION && args->result_queue_length[0] < RESULT_QUEUE_CAPACITY; i++) {
+        result_t result;
+
+        if (attempt_next_match(&result)) {
+            uint queue_index = atomic_fetch_add_explicit(
+                    &result_queue_length_atomic, 1, memory_order_relaxed, memory_scope_device);
+
+            if (queue_index < RESULT_QUEUE_CAPACITY) {
+                args->result_queue[queue_index] = result;
+            }
+        }
+
+        work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+
+        args->result_queue_length[0] = atomic_load(&result_queue_length_atomic);
+    }
+
+    work_group_barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+
+    args->cycles[0] = i;
+
+    if (args->result_queue_length[0] > RESULT_QUEUE_CAPACITY) {
+        args->result_queue_length[0] = RESULT_QUEUE_CAPACITY;
+    }
 }
 
 __attribute__((reqd_work_group_size(WORK_GROUP_SIZE_X, WORK_GROUP_SIZE_Y, WORK_GROUP_SIZE_Z)))
@@ -842,7 +884,10 @@ kernel void entry_point(
     global secp256k1_context_arg *ctx_arg,
     global patterns_chunk *patterns_chunk_buffer,
     global secp256k1_ecmult_context_chunk *chunk,
-    global secret_key_t *seckey
+    global secret_key_t *seckey,
+    global uint *cycles,
+    global uint *result_queue_length,
+    global result_t *result_queue
     /* global mrg32k3a_context *mrg32k3a_ctx */
 ) {
     arguments args = (arguments) {
@@ -851,6 +896,9 @@ kernel void entry_point(
         .patterns_chunk_buffer = patterns_chunk_buffer,
         .chunk = chunk,
         .seckey = seckey,
+        .cycles = cycles,
+        .result_queue_length = result_queue_length,
+        .result_queue = result_queue,
     };
 
     switch (state) {

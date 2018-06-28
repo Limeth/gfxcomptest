@@ -20,16 +20,20 @@ use ocl::traits::OclPrm;
 use rand::Rng;
 use rand::OsRng;
 use std::fmt;
+use std::fmt::Write;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 const ADDRESS_LENGTH: usize = 40;
+const PRIVATE_KEY_LENGTH: usize = 64;
+const ADDRESS_BYTES: usize = ADDRESS_LENGTH / 2;
 const PATTERN_CHUNK_BYTES: usize = 1000;
 const MRG32K3A_SEEDS_LEN: usize = 6;
 const SECRET_KEY_BYTES: usize = 32;
 const M1: u64 = 4294967087;
 const M2: u64 = 4294944443;
+const RESULT_QUEUE_CAPACITY: usize = 16;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -52,6 +56,29 @@ impl secret_key_t {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct address_bytes_array_alias([u8; ADDRESS_BYTES]);
+
+impl_array!(address_bytes_array_alias([u8; ADDRESS_BYTES]));
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct address_t {
+    array: address_bytes_array_alias,
+}
+
+unsafe impl OclPrm for address_t {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct result_t {
+    seckey: secret_key_t,
+    address: address_t,
+}
+
+unsafe impl OclPrm for result_t {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -136,7 +163,27 @@ fn main() -> ocl::Result<()> {
     let (ctx_arg, chunks) = secp256k1.copied_without_pointers();
 
     let allowed_characters = "0123456789abcdef";
-    let patterns = vec!["c0ffee", "c0c0a", "deadbeef"];
+    let patterns = vec![
+        "abcde",
+        "000000000",
+        "111111111",
+        "222222222",
+        "333333333",
+        "444444444",
+        "555555555",
+        "666666666",
+        "777777777",
+        "888888888",
+        "999999999",
+        "aaaaaaaaa",
+        "bbbbbbbbb",
+        "ccccccccc",
+        "ddddddddd",
+        "eeeeeeeee",
+        "fffffffff",
+        "012345678",
+        "123456789",
+    ];
     let mut patterns_by_length: [Vec<String>; ADDRESS_LENGTH] = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 
     'pattern_loop:
@@ -186,6 +233,16 @@ fn main() -> ocl::Result<()> {
     Ok(())
 }
 
+fn to_hex_string(slice: &[u8], expected_string_size: usize) -> Result<String, fmt::Error> {
+    let mut result = String::with_capacity(expected_string_size);
+
+    for &byte in slice {
+        write!(&mut result, "{:02x}", byte)?;
+    }
+
+    Ok(result)
+}
+
 macro_rules! device_info {
     ($context:expr, $device_index:expr, $($device_info:tt)+) => {
         match $context.device_info($device_index, DeviceInfo::$($device_info)+).unwrap() {
@@ -229,13 +286,14 @@ fn exec_device(
     let mut program_builder = ProgramBuilder::new();
 
     // nVidia has source caching, but it isn't reliable when using #include
-    #[cfg(debug_assertions)]
+    // #[cfg(debug_assertions)]
     std::env::set_var("CUDA_CACHE_DISABLE", "1");
     program_builder.cmplr_opt("-cl-std=CL2.0");
     program_builder.cmplr_def("WORK_GROUP_SIZE_X", work_group_size[0] as i32);
     program_builder.cmplr_def("WORK_GROUP_SIZE_Y", work_group_size[1] as i32);
     program_builder.cmplr_def("WORK_GROUP_SIZE_Z", work_group_size[2] as i32);
     program_builder.cmplr_def("GLOBAL_WORK_SIZE", global_work_size_linear as i32);
+    program_builder.cmplr_def("RESULT_QUEUE_CAPACITY", RESULT_QUEUE_CAPACITY as i32);
     #[cfg(debug_assertions)]
     program_builder.cmplr_def("DEBUG_ASSERTIONS", 1);
 
@@ -255,7 +313,6 @@ fn exec_device(
         // .dims(max_work_item_dimensions)
         .dims((max_work_group_size * max_compute_units as usize, 1, 1))
         .build()?;
-    // let buffer = pro_que.create_buffer::<u32>()?;
     let secp256k1_buffer = pro_que.buffer_builder::<secp256k1_context_struct_arg>()
         .flags(MemFlags::READ_ONLY)
         .len(1)
@@ -272,6 +329,18 @@ fn exec_device(
         .flags(MemFlags::READ_ONLY)
         .len(1)
         .build()?;
+    let cycles_buffer = pro_que.buffer_builder::<u32>()
+        .flags(MemFlags::READ_WRITE)
+        .len(1)
+        .build()?;
+    let result_queue_length_buffer = pro_que.buffer_builder::<u32>()
+        .flags(MemFlags::READ_WRITE)
+        .len(1)
+        .build()?;
+    let result_queue_buffer = pro_que.buffer_builder::<result_t>()
+        .flags(MemFlags::READ_WRITE)
+        .len(RESULT_QUEUE_CAPACITY)
+        .build()?;
     // let mrg32k3a_buffer = pro_que.buffer_builder::<mrg32k3a_context>()
     //     .flags(MemFlags::READ_ONLY)
     //     .len(1)
@@ -281,17 +350,15 @@ fn exec_device(
         .global_work_size(global_work_size)
         // should conform to MaxWorkItemSizes limits
         .local_work_size(work_group_size)
-        // .arg(&buffer)
         .arg(&secp256k1_buffer)
         .arg(&patterns_buffer)
         .arg(&chunk_buffer)
         .arg(&seckey_buffer)
+        .arg(&cycles_buffer)
+        .arg(&result_queue_length_buffer)
+        .arg(&result_queue_buffer)
         // .arg(&mrg32k3a_buffer)
         .build()?;
-
-    let data = [0, 1, 2];
-
-    // buffer.write(&data[..]).enq()?;
 
     // {{{ Loading context
     println!("Transferring the secp256k1 context...");
@@ -365,18 +432,25 @@ fn exec_device(
 
     println!("Launching computation.");
 
-    // let mut vec = vec![0; buffer.len()];
-
-    // buffer.read(&mut vec).enq()?;
-    // println!("{:?}", vec);
-
-    for _ in 0..3000 {
+    loop {
         unsafe { kernel.enq()?; }
+        // thread::sleep(Duration::new(0, 1000000));
+
+        let mut cycles_array = [0];
+        let mut result_queue_length_array = [0];
+        let mut result_queue_array = [result_t::default(); RESULT_QUEUE_CAPACITY];
+
+        cycles_buffer.read(&mut cycles_array[..]).enq()?;
+        result_queue_length_buffer.read(&mut result_queue_length_array[..]).enq()?;
+        result_queue_buffer.read(&mut result_queue_array[..]).enq()?;
+
+        for result in &result_queue_array[..result_queue_length_array[0] as usize] {
+            let seckey_string = to_hex_string(&result.seckey.array.0[..], PRIVATE_KEY_LENGTH)
+                .expect("Could not format the secret key.");
+            let address_string = to_hex_string(&result.address.array.0[..], ADDRESS_LENGTH)
+                .expect("Could not format the address.");
+
+            println!("Found address: 0x{}\tSecret key: 0x{}", address_string, seckey_string);
+        }
     }
-
-    // buffer.read(&mut vec).enq()?;
-    // println!("{:?}", vec);
-    // }}}
-
-    Ok(())
 }
